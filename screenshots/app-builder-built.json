@@ -1,0 +1,41 @@
+{
+  "url": "http://127.0.0.1:8081/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "Vela Desk",
+      "hasCanvas": false,
+      "bodyTextLen": 1229,
+      "bodyTextHash": "1e24c69b344c4062f0892904c64634723cb35c69fa2a654f117a344d4adba278",
+      "bodyTextPrefix": "Vela Desk SYSTEMATIC RESEARCH Quá khứ không đảm bảo tương lai. P",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "Vela Desk",
+      "hasCanvas": false,
+      "bodyTextLen": 1229,
+      "bodyTextHash": "1e24c69b344c4062f0892904c64634723cb35c69fa2a654f117a344d4adba278",
+      "bodyTextPrefix": "Vela Desk SYSTEMATIC RESEARCH Quá khứ không đảm bảo tương lai. P",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-built.json",
+  "divergesFromBaseline": true,
+  "baselineReasons": [
+    "desktop: canvas disappeared",
+    "mobile: canvas disappeared"
+  ]
+}

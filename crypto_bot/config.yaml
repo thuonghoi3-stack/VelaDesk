@@ -1,0 +1,27 @@
+exchange: binance
+market: usdm          # spot | usdm
+symbols:
+  - BTC/USDT
+  - ETH/USDT
+  - SOL/USDT
+ltf: 1h
+htf: 4h
+lookback_days: 900
+equity: 10000
+risk_pct: 0.0075
+max_leverage: 2
+side: both            # long_only | both
+max_positions: 1
+max_exposure: 0.25
+daily_loss_cap: 0.03
+taker_fee: 0.0004     # 0.04%
+slippage_bps: 2
+funding_per_8h: 0.0001
+trade_volatility: false
+time_stop_bars:
+  "15m": 48
+  "1h": 24
+  "4h": 16
+  "1d": 8
+warmup: 220
+cache_dir: ./data/cache
