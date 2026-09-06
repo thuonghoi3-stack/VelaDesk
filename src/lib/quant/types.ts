@@ -35,7 +35,12 @@ export type PortedStrategyId =
   | "stoch_rsi" // Stochastic RSI (14/14/3/3)
   | "vwap_reclaim" // session VWAP reclaim/loss
   | "orb" // opening range breakout (6 bars, UTC day)
-  | "rsi7_momentum"; // RSI(7) 50-line momentum
+  | "rsi7_momentum" // RSI(7) 50-line momentum
+  | "tsm" // time-series momentum (90-bar lookback)
+  | "high_52w" // 52-week-high breakout
+  | "ma200_gravity" // ±5% band around SMA200, exit at the mean
+  | "tom" // turn-of-the-month seasonality
+  | "weinstein_s2"; // Weinstein Stage 2 breakout
 
 export type StrategyId = HouseStrategyId | PortedStrategyId;
 /** "combo" = both house strategies layered (the desk default). */

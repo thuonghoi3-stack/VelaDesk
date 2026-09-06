@@ -54,6 +54,11 @@ Ngoài 2 chiến lược nội bộ (Trend Pullback + Momentum Confirm, Mean Rev
 | VWAP Reclaim | Giá đòi lại VWAP phiên | Trend |
 | Opening Range Breakout | Range 6 nến đầu ngày UTC | Breakout |
 | RSI-7 Momentum | RSI 7 cắt 50 | Trend |
+| Time-Series Momentum | Moskowitz–Ooi–Pedersen 2012 (momentum 90 nến) | Trend |
+| 52-Week High | George & Hwang 2004 (đỉnh 252 nến) | Trend |
+| MA200 Gravity | Mean reversion ±5% quanh SMA200 | Reversion |
+| Turn-of-Month | Hiệu ứng lịch cuối tháng (Kaiser 2019) | Reversion |
+| Weinstein Stage 2 | Stage Analysis (EMA200 tăng + đỉnh 50 nến) | Trend |
 
 Quy ước port (ghi trong `src/lib/quant/strategy/library.ts`):
 
@@ -86,7 +91,12 @@ Quy ước port (ghi trong `src/lib/quant/strategy/library.ts`):
    (vd. RSI-7 trên 5m: 3.173 lệnh, taker round-trip ~0,12% ăn sạch edge → −87%). Scalp kiếm
    được tiền cần maker fee (limit entry), fee tier thấp, hoặc lọc tín hiệu gắt — hãy dùng
    `compare-library.mjs` để tự kiểm chứng trước khi tin bất kỳ con số nào.
-9. **Biến thể Turtle có exit kênh riêng**: S1 (20/10) và S2 (55/20) thoát khi **close thủng kênh
+9. **Nhóm "chất lượng" (literature-backed, khung 1d/4h)** — BTC thật, sau chi phí:
+   Weinstein S2 **+156%** (4h, Sharpe 1.04, PF 2.77) · High 52w +97% (PF 3.22) ·
+   **TSM +31,6% với OOS +11,9% (Sharpe 0,63)** — một trong số ít chiến lược có OOS dương;
+   MA200 Gravity OOS +8,6%. Trên 1d: TSM PF 5.07, Weinstein S2 PF 6.42. Đây là nhóm
+   được thiết kế cho khung cao + ít lệnh — đúng điều kiện edge sống sót qua chi phí.
+10. **Biến thể Turtle có exit kênh riêng**: S1 (20/10) và S2 (55/20) thoát khi **close thủng kênh
    đối diện** (N=10/20) — exit gốc trong sách, engine xử lý bằng `exitChannelBars`, không phải
    signal flip. Nghiên cứu thực nghiệm (`node scripts/turtle-research.mjs`) cho thấy không có
    biến thể nào thắng mọi symbol: BTC 4h mở 20 signal-flip tốt nhất (+99% full-sample), ETH 4h

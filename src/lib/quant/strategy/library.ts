@@ -166,6 +166,7 @@ export const REVERSION_CLASS: ReadonlySet<string> = new Set([
   "bb_reversion",
   "stoch_reversion",
   "stoch_rsi",
+  "tom",
 ]);
 
 /**
@@ -189,6 +190,10 @@ export const SIGNAL_EXIT_CLASS: ReadonlySet<string> = new Set([
   "vwap_reclaim",
   "orb",
   "rsi7_momentum",
+  "tsm",
+  "high_52w",
+  "ma200_gravity",
+  "weinstein_s2",
 ]);
 
 /**
@@ -722,6 +727,120 @@ function portRsi7Momentum(ctx: PortCtx): void {
     else if (allowShort && crossunder(rsi7, line, i)) mark(bars[i]!, -1, "rsi7_momentum");
   }
 }
+/**
+ * Quality/literature-backed strategies — designed for 1d/4h where the desk's
+ * empirical results show edges survive costs (few, long trades).
+ *
+ * - TSM: time-series momentum (Moskowitz–Ooi–Pedersen 2012). Position =
+ *   sign of the trailing return over `LOOKBACK` bars.
+ * - HIGH52W: 52-week-high premium (George & Hwang 2004). Long on a new
+ *   closing high over the lookback, short on a new low (mirror).
+ * - MA200_GRAVITY: discount/premium around the SMA200 — enter when price
+ *   crosses the ±5% band, exit back at the mean (signal flip).
+ * - TOM: turn-of-the-month seasonality (Lakonishok–Smidt; Kaiser 2019 for
+ *   Bitcoin) — long the last 3 calendar days of the month.
+ * - WEINSTEIN_S2: Stage 2 breakout (Stan Weinstein) — price above a rising
+ *   200-EMA and a new 50-bar closing high.
+ * All causal: value at i uses bars ≤ i.
+ */
+
+const TSM_LOOKBACK = 90;
+const HIGH_LOOKBACK = 252;
+const GRAVITY_BAND = 0.05;
+const WEINSTEIN_HIGH = 50;
+const WEINSTEIN_SLOPE = 10;
+
+/** Time-series momentum: long while the trailing return is positive. */
+function portTsm(ctx: PortCtx): void {
+  const { bars, warmup, allowShort } = ctx;
+  const closes = bars.map((b) => b.close);
+  for (let i = Math.max(warmup, TSM_LOOKBACK + 1); i < bars.length; i++) {
+    const retPrev = closes[i - 1]! / closes[i - 1 - TSM_LOOKBACK]! - 1;
+    const retNow = closes[i]! / closes[i - TSM_LOOKBACK]! - 1;
+    if (retPrev <= 0 && retNow > 0) mark(bars[i]!, 1, "tsm");
+    else if (allowShort && retPrev >= 0 && retNow < 0) mark(bars[i]!, -1, "tsm");
+  }
+}
+
+/** 52-week high / low breakout on closes. */
+function portHigh52w(ctx: PortCtx): void {
+  const { bars, warmup, allowShort } = ctx;
+  const closes = bars.map((b) => b.close);
+  for (let i = Math.max(warmup, HIGH_LOOKBACK + 1); i < bars.length; i++) {
+    let hh = closes[i - HIGH_LOOKBACK]!;
+    let ll = hh;
+    for (let k = i - HIGH_LOOKBACK + 1; k < i; k++) {
+      const v = closes[k]!;
+      if (v > hh) hh = v;
+      if (v < ll) ll = v;
+    }
+    const c = closes[i]!;
+    if (c > hh) mark(bars[i]!, 1, "high_52w");
+    else if (allowShort && c < ll) mark(bars[i]!, -1, "high_52w");
+  }
+}
+
+/** Gravity: long a ≥5% discount below SMA200, exit back at the mean; mirrored short. */
+function portMa200Gravity(ctx: PortCtx): void {
+  const { bars, warmup, allowShort } = ctx;
+  for (let i = Math.max(warmup, 1); i < bars.length; i++) {
+    const m = bars[i]!.ema200;
+    const mPrev = bars[i - 1]!.ema200;
+    if (m == null || mPrev == null) continue;
+    const c = bars[i]!.close;
+    const cPrev = bars[i - 1]!.close;
+    const bandLo = m * (1 - GRAVITY_BAND);
+    const bandHi = m * (1 + GRAVITY_BAND);
+    const crossedLo = cPrev >= mPrev * (1 - GRAVITY_BAND) && c < bandLo;
+    const crossedHi = cPrev <= mPrev * (1 + GRAVITY_BAND) && c > bandHi;
+    if (crossedLo) mark(bars[i]!, 1, "ma200_gravity");
+    else if (allowShort && crossedHi) mark(bars[i]!, -1, "ma200_gravity");
+  }
+}
+
+/** Turn-of-the-month: long the last 3 calendar days of each UTC month. */
+function portTom(ctx: PortCtx): void {
+  const { bars, warmup, allowShort } = ctx;
+  const inTail = (time: number): boolean => {
+    const d = new Date(time);
+    const dom = d.getUTCDate();
+    const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+    return dom >= last - 2; // last 3 days of the month
+  };
+  let prev = false;
+  for (let i = warmup; i < bars.length; i++) {
+    const now = inTail(bars[i]!.time);
+    if (now && !prev) mark(bars[i]!, 1, "tom");
+    else if (allowShort && !now && prev && i + 1 <= bars.length) {
+      // First days of the new month: fade the reversal only once per month.
+      if (!inTail(bars[Math.max(0, i - 4)]!.time)) mark(bars[i]!, -1, "tom");
+    }
+    prev = now;
+  }
+}
+
+/** Weinstein Stage 2: price above a rising EMA200 + new 50-bar closing high. */
+function portWeinsteinS2(ctx: PortCtx): void {
+  const { bars, warmup, allowShort } = ctx;
+  const closes = bars.map((b) => b.close);
+  for (let i = Math.max(warmup, WEINSTEIN_SLOPE + 1); i < bars.length; i++) {
+    const e = bars[i]!.ema200;
+    const ePrev = bars[i - WEINSTEIN_SLOPE]!.ema200;
+    const c = closes[i]!;
+    if (e == null || ePrev == null) continue;
+    const rising = e > ePrev;
+    const falling = e < ePrev;
+    let hh = closes[i - WEINSTEIN_HIGH]!;
+    let ll = hh;
+    for (let k = i - WEINSTEIN_HIGH + 1; k <= i; k++) {
+      const v = closes[k]!;
+      if (v > hh) hh = v;
+      if (v < ll) ll = v;
+    }
+    if (rising && c > e && c >= hh) mark(bars[i]!, 1, "weinstein_s2");
+    else if (allowShort && falling && c < e && c <= ll) mark(bars[i]!, -1, "weinstein_s2");
+  }
+}
 // --------------------------------- registry ---------------------------------
 
 export type StrategyMeta = {
@@ -984,7 +1103,63 @@ export const STRATEGY_LIBRARY: StrategyMeta[] = [
       "Exit: RSI cắt ngược lại 50 (signal flip)",
     ],
   },
+  {
+    id: "tsm",
+    name: "Time-Series Momentum",
+    origin: "Moskowitz–Ooi–Pedersen (2012) · momentum 90 nến",
+    style: "Trend",
+    rules: [
+      "Position = dấu của lợi nhuận trễ 90 nến (long khi dương)",
+      "Flip khi momentum đổi dấu — ít lệnh, nắm trọn pha",
+      "Edge được tài liệu học thuật xác nhận trên mọi asset class",
+    ],
+  },
+  {
+    id: "high_52w",
+    name: "52-Week High",
+    origin: "George & Hwang (2004) · breakout đỉnh 252 nến",
+    style: "Trend",
+    rules: [
+      "Long: close lập đỉnh mới 252 nến (hiệu ứng 52-week high)",
+      "Short (mirror): thủng đáy 252 nến",
+      "Signal flip — hệ thống nắm đuôi dài đúng như nghiên cứu",
+    ],
+  },
+  {
+    id: "ma200_gravity",
+    name: "MA200 Gravity",
+    origin: "Mean reversion về SMA200 (De Bondt–Thaler style)",
+    style: "Reversion",
+    rules: [
+      "Long: close cắt vào vùng chiết khấu ≥5% dưới SMA200",
+      "Short: close cắt vào vùng premium ≥5% trên SMA200",
+      "Exit: giá quay về đúng SMA200 (signal flip tại fair value)",
+    ],
+  },
+  {
+    id: "tom",
+    name: "Turn-of-Month",
+    origin: "Lakonishok–Smidt · Kaiser (2019) cho Bitcoin",
+    style: "Reversion",
+    rules: [
+      "Long 3 ngày lịch CUỐI tháng (hiệu ứng turn-of-month có tài liệu)",
+      "Short 2 ngày đầu tháng kế tiếp (tuỳ chọn)",
+      "Reversion class: TP ladder + time stop 8 nến (1d) quản lý lệnh",
+    ],
+  },
+  {
+    id: "weinstein_s2",
+    name: "Weinstein Stage 2",
+    origin: "Stan Weinstein · Stage Analysis (EMA200 tăng + đỉnh 50 nến)",
+    style: "Trend",
+    rules: [
+      "Stage 2: EMA200 ĐANG TĂNG + close trên EMA200",
+      "Long: close lập đỉnh 50 nến trong stage 2",
+      "Short mirror ở stage 4 (EMA200 giảm + đáy mới)",
+    ],
+  },
 ];
+
 
 
 
@@ -1012,6 +1187,11 @@ const PORTS: Record<PortedStrategyId, (ctx: PortCtx) => void> = {
   vwap_reclaim: portVwapReclaim,
   orb: portOrb,
   rsi7_momentum: portRsi7Momentum,
+  tsm: portTsm,
+  high_52w: portHigh52w,
+  ma200_gravity: portMa200Gravity,
+  tom: portTom,
+  weinstein_s2: portWeinsteinS2,
 };
 
 /**

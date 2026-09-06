@@ -1,0 +1,56 @@
+  {
+    id: "tsm",
+    name: "Time-Series Momentum",
+    origin: "Moskowitz–Ooi–Pedersen (2012) · momentum 90 nến",
+    style: "Trend",
+    rules: [
+      "Position = dấu của lợi nhuận trễ 90 nến (long khi dương)",
+      "Flip khi momentum đổi dấu — ít lệnh, nắm trọn pha",
+      "Edge được tài liệu học thuật xác nhận trên mọi asset class",
+    ],
+  },
+  {
+    id: "high_52w",
+    name: "52-Week High",
+    origin: "George & Hwang (2004) · breakout đỉnh 252 nến",
+    style: "Trend",
+    rules: [
+      "Long: close lập đỉnh mới 252 nến (hiệu ứng 52-week high)",
+      "Short (mirror): thủng đáy 252 nến",
+      "Signal flip — hệ thống nắm đuôi dài đúng như nghiên cứu",
+    ],
+  },
+  {
+    id: "ma200_gravity",
+    name: "MA200 Gravity",
+    origin: "Mean reversion về SMA200 (De Bondt–Thaler style)",
+    style: "Reversion",
+    rules: [
+      "Long: close cắt vào vùng chiết khấu ≥5% dưới SMA200",
+      "Short: close cắt vào vùng premium ≥5% trên SMA200",
+      "Exit: giá quay về đúng SMA200 (signal flip tại fair value)",
+    ],
+  },
+  {
+    id: "tom",
+    name: "Turn-of-Month",
+    origin: "Lakonishok–Smidt · Kaiser (2019) cho Bitcoin",
+    style: "Reversion",
+    rules: [
+      "Long 3 ngày lịch CUỐI tháng (hiệu ứng turn-of-month có tài liệu)",
+      "Short 2 ngày đầu tháng kế tiếp (tuỳ chọn)",
+      "Reversion class: TP ladder + time stop 8 nến (1d) quản lý lệnh",
+    ],
+  },
+  {
+    id: "weinstein_s2",
+    name: "Weinstein Stage 2",
+    origin: "Stan Weinstein · Stage Analysis (EMA200 tăng + đỉnh 50 nến)",
+    style: "Trend",
+    rules: [
+      "Stage 2: EMA200 ĐANG TĂNG + close trên EMA200",
+      "Long: close lập đỉnh 50 nến trong stage 2",
+      "Short mirror ở stage 4 (EMA200 giảm + đáy mới)",
+    ],
+  },
+];

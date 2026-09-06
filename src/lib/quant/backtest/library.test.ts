@@ -14,8 +14,8 @@ function barsWith(cfg: DeskConfig, id: DeskConfig["strategyId"]): FeatureBar[] {
   }).ltf;
 }
 
-test("library registry has twenty-three documented ports", () => {
-  assert.equal(STRATEGY_LIBRARY.length, 23);
+test("library registry has twenty-eight documented ports", () => {
+  assert.equal(STRATEGY_LIBRARY.length, 28);
   for (const s of STRATEGY_LIBRARY) {
     assert.ok(s.name.length > 0 && s.origin.length > 0 && s.rules.length >= 2);
   }
@@ -101,6 +101,17 @@ test("scalping ports use the right exit classes", () => {
   // stoch_rsi is reversion: TP ladder allowed, no signal flips
   const sr = runBacktest(barsWith(cfg, "stoch_rsi"), { ...cfg, strategyId: "stoch_rsi" }, cfg.ltf);
   assert.equal(sr.trades.filter((t) => t.reason === "signal_flip").length, 0);
+});
+
+test("quality ports use the right exit classes", () => {
+  const cfg = defaultConfig({ warmup: 220 });
+  for (const id of ["tsm", "high_52w", "ma200_gravity", "weinstein_s2"] as const) {
+    const res = runBacktest(barsWith(cfg, id), { ...cfg, strategyId: id }, cfg.ltf);
+    const capped = res.trades.filter((t) => t.reason === "tp1" || t.reason === "tp2" || t.reason === "time_stop");
+    assert.equal(capped.length, 0, `${id}: signal-exit must not close via TP/time stop`);
+  }
+  const tom = runBacktest(barsWith(cfg, "tom"), { ...cfg, strategyId: "tom" }, cfg.ltf);
+  assert.equal(tom.trades.filter((t) => t.reason === "signal_flip").length, 0);
 });
 
 test("strategy select isolates signals to the chosen strategy", () => {
