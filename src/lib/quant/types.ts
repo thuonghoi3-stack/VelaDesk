@@ -41,7 +41,7 @@ export type PortedStrategyId =
   | "ma200_gravity" // ±5% band around SMA200, exit at the mean
   | "tom" // turn-of-the-month seasonality
   | "weinstein_s2" // Weinstein Stage 2 breakout
-  | "sma_cross"; // SMA 10/30 cross + volume (E0V1E)
+  | "e0v1e"; // NFI-family long scalper (EWO + CTI dip buys)
 
 export type StrategyId = HouseStrategyId | PortedStrategyId;
 /** "combo" = both house strategies layered (the desk default). */
@@ -280,6 +280,11 @@ export type DeskConfig = {
   kcEmaLen: number;
   kcAtrLen: number;
   kcMult: number;
+  /** E0V1E dip thresholds: close < EMA8×dip8, EMA16×dip16, SMA15×dip15.
+   * Defaults are the NFI original (for high-vol altcoins); BTC needs ~0.995/0.998/0.99. */
+  e0v1eDip8: number;
+  e0v1eDip16: number;
+  e0v1eDip15: number;
   /** ADX regime-gate threshold for ported strategies (trend ≥, reversion <). */
   portAdxMin: number;
   stAtrMult: number;

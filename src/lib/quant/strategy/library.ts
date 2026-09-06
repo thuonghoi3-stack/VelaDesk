@@ -167,6 +167,7 @@ export const REVERSION_CLASS: ReadonlySet<string> = new Set([
   "stoch_reversion",
   "stoch_rsi",
   "tom",
+  "e0v1e",
 ]);
 
 /**
@@ -841,17 +842,69 @@ function portWeinsteinS2(ctx: PortCtx): void {
     else if (allowShort && falling && c < e && c <= ll) mark(bars[i]!, -1, "weinstein_s2");
   }
 }
-/** SMA Cross (E0V1E): SMA10/30 cross with a volume confirmation filter. */
-function portSmaCross(ctx: PortCtx): void {
-  const { bars, warmup, allowShort } = ctx;
+/**
+ * E0V1E (NFI-family long scalper, 5m): LONG-ONLY dip buys with two
+ * conditions, ported 1:1 from vaskosmihaylov/nfi-custom-strategies
+ * user_data/strategies/e0v1e/binance.py (hyperopt defaults kept):
+ *
+ * ewo:   RSI4 < 50 && close < EMA8 x 0.956 && EWO > -1.238
+ *        && close < EMA16 x 0.986 && RSI14 < 30
+ *        with EWO = (EMA50 - EMA200) / low * 100
+ * dip32: RSI20 falling && RSI4 < 63 && RSI14 > 16
+ *        && close < SMA15 x 0.932 && CTI20 < -0.8
+ *        with CTI = (close - SMA20) / (0.1 * sum|close - SMA20|)
+ *
+ * Exits in the source are a custom fastk/profit-lock scheme — the desk runs
+ * this through its reversion class (TP ladder + time stop = the bounce
+ * scalp) instead. LONG-ONLY by design: the source has no short logic.
+ */
+function portE0v1e(ctx: PortCtx): void {
+  const { bars, warmup } = ctx;
+  const cfg = ctx.cfg;
   const closes = bars.map((b) => b.close);
-  const fast = smaSeries(closes, 10);
-  const slow = smaSeries(closes, 30);
+  const rsi4 = rsiSeries(closes, 4);
+  const rsi14 = rsiSeries(closes, 14);
+  const rsi20 = rsiSeries(closes, 20);
+  const ema8 = emaSeries(closes, 8);
+  const ema16 = emaSeries(closes, 16);
+  const sma15 = smaSeries(closes, 15);
+  const ema50 = emaSeries(closes, 50);
+  const ema200s = emaSeries(closes, 200);
+  const lows = bars.map((b) => b.low);
+
+  // CTI(20) = (close - SMA20) / (0.1 * sum|close - SMA20|) — range ~[-1, 1].
+  const mean20 = smaSeries(closes, 20);
+  const cti: Array<number | null> = new Array(bars.length).fill(null);
+  for (let i = 19; i < bars.length; i++) {
+    const m = mean20[i]!;
+    let absDev = 0;
+    for (let k = i - 19; k <= i; k++) absDev += Math.abs(closes[k]! - m);
+    const denom = 0.1 * absDev;
+    if (denom > 0) cti[i] = (closes[i]! - m) / denom;
+  }
+
   for (let i = warmup; i < bars.length; i++) {
-    // Volume confirmation: signal bar must trade above its 20-bar average.
-    if ((bars[i]!.volSpike ?? 0) < 1.0) continue;
-    if (crossover(fast, slow, i)) mark(bars[i]!, 1, "sma_cross");
-    else if (allowShort && crossunder(fast, slow, i)) mark(bars[i]!, -1, "sma_cross");
+    const rf = rsi4[i]!;
+    const r = rsi14[i]!;
+    const rs = rsi20[i]!;
+    const ctiI = cti[i]!;
+    const c = closes[i]!;
+    const e8 = ema8[i]!;
+    const e16 = ema16[i]!;
+    const s15 = sma15[i]!;
+    const w = ((ema50[i]! - ema200s[i]!) / lows[i]!) * 100;
+
+    const isEwo =
+      rf < 50 &&
+      c < e8 * cfg.e0v1eDip8 &&
+      w > -1.238 &&
+      c < e16 * cfg.e0v1eDip16 &&
+      r < 30;
+    const rsFalling = i > 0 && rsi20[i - 1] != null && rs < rsi20[i - 1]!;
+    const isDip32 = rsFalling && rf < 63 && r > 16 && c < s15 * cfg.e0v1eDip15 && ctiI < -0.8;
+
+    if (isEwo) mark(bars[i]!, 1, "e0v1e");
+    else if (isDip32) mark(bars[i]!, 1, "e0v1e");
   }
 }
 
@@ -1173,15 +1226,15 @@ export const STRATEGY_LIBRARY: StrategyMeta[] = [
     ],
   },
   {
-    id: "sma_cross",
-    name: "SMA Cross Auto (E0V1E)",
-    origin: "CSDN · SMA cross tự động 10/30 + volume",
-    style: "Trend",
+    id: "e0v1e",
+    name: "E0V1E Scalper",
+    origin: "vaskosmihaylov/nfi-custom-strategies · e0v1e (long scalp 5m)",
+    style: "Reversion",
     rules: [
-      "Long: SMA10 cắt LÊN SMA30 với volume ≥ SMA20 volume",
-      "Short: SMA10 cắt XUỐNG SMA30",
-      "SMA chậm hơn EMA cùng chu kỳ — tín hiệu ít nhiễu hơn, trễ hơn",
-      "Exit: tín hiệu đảo chiều (signal flip)",
+      "LONG-ONLY dip-buy scalp 5m, hai điều kiện OR:",
+      "EWO: RSI4 < 50 · close < EMA8×0.956 · EWO(50/200) > −1.238 · close < EMA16×0.986 · RSI14 < 30",
+      "Dip32: RSI20 giảm · RSI4 < 63 · RSI14 > 16 · close < SMA15×0.932 · CTI20 < −0.8",
+      "Exit gốc là fastk/profit-lock — desk chạy reversion class (TP + time stop)",
     ],
   },
 ];
@@ -1218,7 +1271,7 @@ const PORTS: Record<PortedStrategyId, (ctx: PortCtx) => void> = {
   ma200_gravity: portMa200Gravity,
   tom: portTom,
   weinstein_s2: portWeinsteinS2,
-  sma_cross: portSmaCross,
+  e0v1e: portE0v1e,
 };
 
 /**
