@@ -91,6 +91,10 @@ Quy ước port (ghi trong `src/lib/quant/strategy/library.ts`):
    (vd. RSI-7 trên 5m: 3.173 lệnh, taker round-trip ~0,12% ăn sạch edge → −87%). Scalp kiếm
    được tiền cần maker fee (limit entry), fee tier thấp, hoặc lọc tín hiệu gắt — hãy dùng
    `compare-library.mjs` để tự kiểm chứng trước khi tin bất kỳ con số nào.
+   E0V1E có **dip chuẩn hóa ATR**: ngưỡng đo bằng số lần ATR(14) giá nằm dưới
+   EMA8/EMA16/SMA15 (mặc định 2.0/3.0/3.5 — đúng mức p99.5 thực đo trên BTC/ETH/SOL 5m), nhờ
+   vậy cùng một ngưỡng cho tần suất tín hiệu tương đương trên mọi coin — BTC 5m: 950 signal,
+   ETH 904, SOL 934 (trước khi chuẩn hóa: BTC = 0 vì % dip cố định dành cho altcoin vol cao).
 9. **Nhóm "chất lượng" (literature-backed, khung 1d/4h)** — BTC thật, sau chi phí:
    Weinstein S2 **+156%** (4h, Sharpe 1.04, PF 2.77) · High 52w +97% (PF 3.22) ·
    **TSM +31,6% với OOS +11,9% (Sharpe 0,63)** — một trong số ít chiến lược có OOS dương;
