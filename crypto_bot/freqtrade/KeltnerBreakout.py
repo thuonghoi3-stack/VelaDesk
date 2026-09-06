@@ -40,6 +40,7 @@ except ImportError:  # freqtrade là dependency tuỳ chọn — fallback thuầ
         startup_candle_count = 400
 
         def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        self._last_df = dataframe  # cho standalone/test ngoài freqtrade
             return dataframe
 
         def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -182,7 +183,12 @@ class KeltnerBreakout(IStrategy):
         **kwargs,
     ) -> float | None:
         # ATR stop bảo vệ: mult × ATR tại nến vào lệnh (gần đúng clamp engine).
-        dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        # Freqtrade: dataframe từ DataProvider; standalone: cache populate cuối.
+        dataframe = None
+        if hasattr(self, "dp") and self.dp is not None:
+            dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+        if dataframe is None or dataframe.empty:
+            dataframe = getattr(self, "_last_df", None)
         if dataframe is None or dataframe.empty:
             return None
         candle = dataframe.iloc[-1]
