@@ -280,8 +280,10 @@ export type DeskConfig = {
   kcEmaLen: number;
   kcAtrLen: number;
   kcMult: number;
-  /** E0V1E dip thresholds: close < EMA8×dip8, EMA16×dip16, SMA15×dip15.
-   * Defaults are the NFI original (for high-vol altcoins); BTC needs ~0.995/0.998/0.99. */
+  /** E0V1E dip thresholds, ATR-NORMALIZED: long when the price sits more
+   * than dip8/dip16/dip15 × ATR(14) BELOW EMA8/EMA16/SMA15. ATR scaling
+   * adapts the same rule to every coin's volatility (measured p99.5 on
+   * BTC/ETH/SOL 5m: ~2.2/3.3/3.6 ATR). */
   e0v1eDip8: number;
   e0v1eDip16: number;
   e0v1eDip15: number;

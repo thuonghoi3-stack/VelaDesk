@@ -870,6 +870,7 @@ function portE0v1e(ctx: PortCtx): void {
   const sma15 = smaSeries(closes, 15);
   const ema50 = emaSeries(closes, 50);
   const ema200s = emaSeries(closes, 200);
+  const atr14 = atrSeries(bars, 14);
   const lows = bars.map((b) => b.low);
 
   // CTI(20) = (close - SMA20) / (0.1 * sum|close - SMA20|) — range ~[-1, 1].
@@ -893,15 +894,22 @@ function portE0v1e(ctx: PortCtx): void {
     const e16 = ema16[i]!;
     const s15 = sma15[i]!;
     const w = ((ema50[i]! - ema200s[i]!) / lows[i]!) * 100;
+    const atrI = atr14[i] ?? 0;
+
+    // ATR-normalized dips: how many ATRs the price sits BELOW each mean —
+    // the same threshold adapts to every coin's volatility.
+    const dip8Atr = atrI > 0 ? (e8 - c) / atrI : 0;
+    const dip16Atr = atrI > 0 ? (e16 - c) / atrI : 0;
+    const dip15Atr = atrI > 0 ? (s15 - c) / atrI : 0;
 
     const isEwo =
       rf < 50 &&
-      c < e8 * cfg.e0v1eDip8 &&
+      dip8Atr > cfg.e0v1eDip8 &&
       w > -1.238 &&
-      c < e16 * cfg.e0v1eDip16 &&
+      dip16Atr > cfg.e0v1eDip16 &&
       r < 30;
     const rsFalling = i > 0 && rsi20[i - 1] != null && rs < rsi20[i - 1]!;
-    const isDip32 = rsFalling && rf < 63 && r > 16 && c < s15 * cfg.e0v1eDip15 && ctiI < -0.8;
+    const isDip32 = rsFalling && rf < 63 && r > 16 && dip15Atr > cfg.e0v1eDip15 && ctiI < -0.8;
 
     if (isEwo) mark(bars[i]!, 1, "e0v1e");
     else if (isDip32) mark(bars[i]!, 1, "e0v1e");

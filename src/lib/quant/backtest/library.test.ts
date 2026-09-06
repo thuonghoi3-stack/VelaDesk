@@ -51,7 +51,12 @@ test("every ported strategy produces signals and closed trades on synthetic data
   const cfg = defaultConfig({ warmup: 220 });
   const ids = STRATEGY_LIBRARY.map((s) => s.id) as PortedStrategyId[];
   for (const id of ids) {
-    const bars = barsWith(cfg, id);
+    // E0V1E's ATR-normalized dips are calibrated to REAL market distributions
+    // (p99.5 ≈ 2/3/3.5 ATR); the smooth synthetic series tops out at ~1.7/2.8
+    // ATR, so the machinery is exercised with widened dips instead.
+    const idCfg =
+      id === "e0v1e" ? { ...cfg, e0v1eDip8: 1.2, e0v1eDip16: 1.8, e0v1eDip15: 1.5 } : cfg;
+    const bars = barsWith(idCfg, id);
     const signals = bars.filter((b) => b.signal !== 0).length;
     assert.ok(signals > 0, `${id}: expected signals on synthetic data, got 0`);
     for (const b of bars) {
