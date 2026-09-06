@@ -211,7 +211,9 @@ export function ChartWorkspace({
             market: "usdm",
             ltfBars: budgetFor(timeframe),
             htfBars: htfBudget(htf),
-            preferred: preferredSource,
+            // null (chưa có last-ok) phải được OMIT — zod .nullish() chịu,null
+            // nhưng cứ omit cho sạch.
+            ...(preferredSource ? { preferred: preferredSource } : {}),
           },
         });
         if (loadSeq.current !== seq) return;

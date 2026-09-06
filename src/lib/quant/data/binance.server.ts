@@ -178,7 +178,7 @@ async function fetchOne(
   tf: Timeframe,
   market: "spot" | "usdm",
   maxBars: number,
-  preferred?: "binance" | "okx",
+  preferred?: "binance" | "okx" | null,
 ): Promise<{ bars: Ohlcv[]; source: DataSource; market: MarketType }> {
   // Venue order honours the client's sticky preference: a venue that worked
   // last time is tried first, skipping the failure penalty of blocked ones
@@ -244,8 +244,8 @@ export async function fetchMarketBundle(args: {
   market: "spot" | "usdm";
   ltfBars: number;
   htfBars: number;
-  /** Venue order hint (sticky client preference). Default: Binance first. */
-  preferred?: "binance" | "okx";
+  /** Venue order hint (sticky client preference); null = auto. */
+  preferred?: "binance" | "okx" | null;
 }): Promise<MarketBundle> {
   const [ltfRes, htfRes] = await Promise.all([
     fetchOne(args.symbol, args.ltf, args.market, args.ltfBars, args.preferred),

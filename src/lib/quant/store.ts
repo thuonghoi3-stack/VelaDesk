@@ -152,7 +152,7 @@ export const useDesk = create<DeskState>()((set, get) => ({
           market: current.market,
           ltfBars: budgetFor(current.ltf),
           htfBars: htfBudget(current.htf),
-          preferred: pref === "auto" ? getLastOkSource() : pref,
+          ...(pref === "auto" ? (getLastOkSource() ? { preferred: getLastOkSource() } : {}) : { preferred: pref }),
         },
       });
       if (get().loadSeq !== seq) return;

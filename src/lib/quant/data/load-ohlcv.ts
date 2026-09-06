@@ -10,7 +10,7 @@ const Schema = z.object({
   ltfBars: z.number().int().min(400).max(120_000),
   htfBars: z.number().int().min(200).max(20_000),
   /** Venue order hint from the client (sticky source preference). */
-  preferred: z.enum(["binance", "okx"]).optional(),
+  preferred: z.enum(["binance", "okx"]).nullish(),
 });
 
 export const loadOhlcv = createServerFn({ method: "POST" })
