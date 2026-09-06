@@ -103,30 +103,74 @@ async function fetchBinancePages(
   return [...byTime.values()].sort((a, b) => a.time - b.time).slice(-maxBars);
 }
 
-async function fetchOkx(symbol: string, tf: Timeframe, maxBars: number): Promise<Ohlcv[]> {
-  const inst = symbol.replace("/", "-");
-  const params = new URLSearchParams({
-    instId: inst,
-    bar: OKX_TF[tf],
-    limit: String(Math.min(300, maxBars)),
-  });
-  const data = (await getJson(`https://www.okx.com/api/v5/market/candles?${params.toString()}`)) as {
-    data?: string[][];
-  };
-  const rows = data.data ?? [];
-  const out: Ohlcv[] = [];
-  for (const row of rows) {
-    const time = Number(row[0]);
-    const open = Number(row[1]);
-    const high = Number(row[2]);
-    const low = Number(row[3]);
-    const close = Number(row[4]);
-    const volume = Number(row[5]);
-    if ([time, open, high, low, close, volume].every(Number.isFinite)) {
-      out.push({ time, open, high, low, close, volume });
+/**
+ * OKX fallback — paginated so a geo-blocked Binance (e.g. Vercel US regions
+ * get HTTP 451) still yields a multi-year sample instead of 300 candles.
+ * Recent candles come from /market/candles (≤300), older ones page backward
+ * through /market/history-candles (100 per call) with an `after` cursor.
+ * USDT-M swaps use the `{base}-SWAP` instrument; spot uses `{base}-{quote}`.
+ */
+export async function fetchOkx(
+  symbol: string,
+  tf: Timeframe,
+  market: "spot" | "usdm",
+  maxBars: number,
+): Promise<Ohlcv[]> {
+  const base = symbol.replace("/", "-").replace(":", "-");
+  const inst = market === "usdm" ? `${base}-SWAP` : base;
+  const bar = OKX_TF[tf];
+  const byTime = new Map<number, Ohlcv>();
+  const addRows = (rows: string[][] | undefined) => {
+    for (const row of rows ?? []) {
+      const time = Number(row[0]);
+      const open = Number(row[1]);
+      const high = Number(row[2]);
+      const low = Number(row[3]);
+      const close = Number(row[4]);
+      const volume = Number(row[5]);
+      if ([time, open, high, low, close, volume].every(Number.isFinite)) {
+        byTime.set(time, { time, open, high, low, close, volume });
+      }
     }
+  };
+
+  const recent = Math.min(300, maxBars);
+  const r1 = (await getJson(
+    `https://www.okx.com/api/v5/market/candles?instId=${inst}&bar=${bar}&limit=${recent}`,
+  )) as { data?: string[][] };
+  addRows(r1.data);
+
+  // History pages use precomputed cursors (bars are uniformly spaced), so
+  // they fetch in PARALLEL WAVES — sequential paging blew Vercel's function
+  // timeout, and one big burst trips OKX's 20-req/2s limit. Waves of 20 with
+  // a pause cover the whole window in a few seconds.
+  const interval = INTERVAL_MS[tf];
+  const now = Date.now();
+  const oldestTarget = now - maxBars * interval;
+  const pageCount = Math.ceil(Math.max(0, maxBars - recent) / 100);
+  const cursors: number[] = [];
+  for (let k = 0; k < pageCount; k++) {
+    const after = oldestTarget + (k + 1) * 100 * interval;
+    if (after >= now) break;
+    cursors.push(after);
   }
-  return out.sort((a, b) => a.time - b.time);
+  const WAVE = 20;
+  for (let w = 0; w < cursors.length; w += WAVE) {
+    const wave = cursors.slice(w, w + WAVE);
+    const chunks = await Promise.all(
+      wave.map((after) =>
+        getJson(
+          `https://www.okx.com/api/v5/market/history-candles?instId=${inst}&bar=${bar}&after=${after}&limit=100`,
+        )
+          .then((r) => (r as { data?: string[][] }).data)
+          .catch(() => undefined),
+      ),
+    );
+    for (const rows of chunks) addRows(rows);
+    if (w + WAVE < cursors.length) await new Promise((r) => setTimeout(r, 1200));
+  }
+
+  return [...byTime.values()].sort((a, b) => a.time - b.time).slice(-maxBars);
 }
 
 async function fetchOne(
@@ -156,8 +200,10 @@ async function fetchOne(
     }
   }
   try {
-    const bars = await fetchOkx(symbol, tf, maxBars);
-    if (bars.length >= 200) return { bars, source: "okx", market: "spot" };
+    const bars = await fetchOkx(symbol, tf, market, maxBars);
+    // OKX swap candles match the requested USDT-M market; OKX spot is the
+    // honest fallback for spot requests (no funding on either).
+    if (bars.length >= 200) return { bars, source: "okx", market };
   } catch {
     /* synthetic fallback */
   }
