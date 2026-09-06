@@ -4,6 +4,7 @@ import {
   BellRing,
   ChevronLeft,
   ChevronRight,
+  ChevronsRight,
   Eraser,
   Gauge,
   LoaderCircle,
@@ -166,6 +167,8 @@ export function ChartWorkspace({
   const [tool, setTool] = useState<DrawingTool>("cursor");
   const [drawings, setDrawings] = useState<Drawing[]>([]);
   const [replay, setReplay] = useState<{ index: number; playing: boolean } | null>(null);
+  const [replayPick, setReplayPick] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState(320);
   const [sourcePref, setSourcePrefState] = useState<SourcePref>(() => getSourcePref());
   const chartApiRef = useRef<{ takeScreenshot: () => HTMLCanvasElement } | null>(null);
   // Stable callback — an inline arrow here would rebuild the chart every render.
@@ -335,11 +338,15 @@ export function ChartWorkspace({
   }, [replay?.playing, bars.length]);
 
   function toggleReplay() {
-    setReplay((r) => {
-      if (r) return null;
-      if (bars.length === 0) return null;
-      return { index: Math.floor(bars.length * 0.6), playing: false };
-    });
+    if (replay) {
+      setReplay(null);
+      setReplayPick(false);
+      return;
+    }
+    if (bars.length === 0) return;
+    setAlertMode(false);
+    // TV-style: first press arms the pick mode — click a bar to start there.
+    setReplayPick(true);
   }
 
   // Keyboard shortcuts: 1–8 timeframes, A alerts, R replay, "/" symbol search.
@@ -360,6 +367,11 @@ export function ChartWorkspace({
       if (tfMap[e.key]) setTf(tfMap[e.key]!);
       else if (e.key.toLowerCase() === "a") setAlertMode((v) => !v);
       else if (e.key.toLowerCase() === "r") toggleReplay();
+      else if (e.key === " ") {
+        // Space toggles replay playback (TV-like).
+        e.preventDefault();
+        setReplay((r) => (r ? { ...r, playing: !r.playing } : r));
+      }
       else if (e.key === "/") {
         e.preventDefault();
         setSymbolSearch(true);
@@ -593,9 +605,34 @@ export function ChartWorkspace({
               {replay.playing ? <Pause className="size-3" /> : <Play className="size-3" />}
               {replay.playing ? "Dừng" : "Tự chạy"}
             </button>
+            <select
+              className="h-7 rounded-md bg-surface-2 px-2 text-[11px] text-fg"
+              value={replaySpeed}
+              onChange={(e) => setReplaySpeed(Number(e.target.value))}
+              title="Tốc độ phát"
+            >
+              <option value={800}>0.4×</option>
+              <option value={320}>1×</option>
+              <option value={160}>2×</option>
+              <option value={80}>4×</option>
+            </select>
             <span className="font-mono tabular text-subtle">
               {replay.index} / {bars.length}
             </span>
+            {bars[Math.max(0, replay.index - 1)] ? (
+              <span className="hidden text-[11px] text-subtle md:inline">
+                {formatDateUtc(bars[Math.max(0, replay.index - 1)]!.time)}
+              </span>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setReplay((r) => (r ? { ...r, index: bars.length, playing: false } : r))}
+              className="flex items-center gap-1 rounded bg-surface-2 px-2 py-1 text-muted hover:text-fg"
+              title="Nhảy tới hiện tại"
+            >
+              <ChevronsRight className="size-3" />
+              Hiện tại
+            </button>
             <span className="ml-auto text-[11px] text-subtle">Biểu đồ ẩn các nến sau mốc replay.</span>
           </div>
         ) : null}
@@ -603,6 +640,11 @@ export function ChartWorkspace({
         {alertMode ? (
           <p className="border-b border-border bg-warn/10 px-3 py-1 text-[11px] text-warn">
             Chế độ alert: bấm vào chart (pane giá) để đặt báo thức tại mức giá đó.
+          </p>
+        ) : null}
+        {replayPick ? (
+          <p className="border-b border-border bg-accent/10 px-3 py-1 text-[11px] text-muted">
+            Chế độ chọn replay: bấm lên chart (pane giá) tại nến muốn bắt đầu — nến sau đó sẽ bị ẩn.
           </p>
         ) : null}
 
@@ -615,6 +657,14 @@ export function ChartWorkspace({
             alertMode={alertMode}
             tool={tool}
             drawings={drawings}
+            replayPick={replayPick}
+            replayBoundaryTime={
+              replay ? (bars[Math.max(0, Math.min(replay.index, bars.length) - 1)]?.time ?? null) : null
+            }
+            onPickReplay={(idx) => {
+              setReplayPick(false);
+              setReplay({ index: Math.min(Math.max(30, idx), bars.length - 1), playing: false });
+            }}
             onHover={setHovered}
             onCreateAlert={onCreateAlert}
             onAddDrawing={(d) => setDrawings((list) => [...list, d])}
@@ -853,10 +903,13 @@ type TermChartProps = {
   alertMode: boolean;
   tool: DrawingTool;
   drawings: Drawing[];
+  replayPick: boolean;
+  replayBoundaryTime: number | null;
   onHover: (bar: FeatureBar | null) => void;
   onCreateAlert: (price: number) => void;
   onAddDrawing: (d: Drawing) => void;
   onDeleteDrawing: (id: string) => void;
+  onPickReplay: (index: number) => void;
   onApiReady: (api: { takeScreenshot: () => HTMLCanvasElement }) => void;
 };
 
@@ -878,10 +931,13 @@ function TermChart({
   alertMode,
   tool,
   drawings,
+  replayPick,
+  replayBoundaryTime,
   onHover,
   onCreateAlert,
   onAddDrawing,
   onDeleteDrawing,
+  onPickReplay,
   onApiReady,
 }: TermChartProps) {
   const host = useRef<HTMLDivElement>(null);
@@ -889,6 +945,12 @@ function TermChart({
   alertModeRef.current = alertMode;
   const toolRef = useRef(tool);
   toolRef.current = tool;
+  const replayPickRef = useRef(replayPick);
+  replayPickRef.current = replayPick;
+  const onPickReplayRef = useRef(onPickReplay);
+  onPickReplayRef.current = onPickReplay;
+  const boundaryRef = useRef(replayBoundaryTime);
+  boundaryRef.current = replayBoundaryTime;
   const onCreateAlertRef = useRef(onCreateAlert);
   onCreateAlertRef.current = onCreateAlert;
   const onHoverRef = useRef(onHover);
@@ -1178,6 +1240,24 @@ function TermChart({
       });
 
       created.subscribeClick((param) => {
+        // Replay pick mode: click a bar to start the replay there.
+        if (replayPickRef.current && param.point && (param.paneIndex ?? 0) === 0) {
+          const price = seriesRef.current?.coordinateToPrice(param.point.y);
+          if (price == null) return;
+          const time = param.time != null ? Number(param.time) * 1000 : null;
+          if (time == null) return;
+          let best = 0;
+          let bestDist = Number.POSITIVE_INFINITY;
+          bars.forEach((b, idx) => {
+            const d = Math.abs(b.time - time);
+            if (d < bestDist) {
+              bestDist = d;
+              best = idx;
+            }
+          });
+          onPickReplayRef.current(Math.max(30, best));
+          return;
+        }
         const activeTool = toolRef.current;
         // Drawing tools take precedence over the alert mode.
         if (activeTool !== "cursor" && param.point) {
@@ -1269,6 +1349,19 @@ function TermChart({
       return x == null || y == null ? null : { x, y };
     };
     const out: React.ReactNode[] = [];
+    if (boundaryRef.current != null) {
+      const bx = ts.timeToCoordinate(Math.floor(boundaryRef.current / 1000));
+      if (bx != null) {
+        out.push(
+          <line key="replay-boundary" x1={bx} y1={0} x2={bx} y2="100%" stroke="rgba(176,138,74,0.9)" strokeWidth={1.25} strokeDasharray="6 4" />,
+        );
+        out.push(
+          <text key="replay-boundary-l" x={bx + 6} y={14} fill="#b08a4a" fontSize={10} fontFamily="IBM Plex Mono">
+            REPLAY ▶
+          </text>,
+        );
+      }
+    }
     for (const d of drawings) {
       const pts = d.points.map(toXY);
       if (pts.some((pt) => pt == null) || pts.length === 0) continue;
