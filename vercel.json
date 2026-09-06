@@ -1,8 +1,5 @@
 {
-  "regions": ["hnd1"],
-  "functions": {
-    "**": {
-      "maxDuration": 60
-    }
-  }
+  "regions": [
+    "hnd1"
+  ]
 }

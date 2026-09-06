@@ -171,6 +171,10 @@ export default defineConfig(({ command, isPreview }) => ({
       ? [
           nitro({
             preset: "vercel",
+            // Deep OKX fallbacks need more than the 10s serverless default.
+            vercel: {
+              functions: { maxDuration: 60 },
+            },
             // Auto-registers server/middleware/* (the PWA install page +
             // manifest + head-tag middleware). Nitro v3 defaults serverDir to
             // false, so removing this silently unwires /?install=1 on deploys.
