@@ -41,7 +41,8 @@ export type PortedStrategyId =
   | "ma200_gravity" // ±5% band around SMA200, exit at the mean
   | "tom" // turn-of-the-month seasonality
   | "weinstein_s2" // Weinstein Stage 2 breakout
-  | "e0v1e"; // NFI-family long scalper (EWO + CTI dip buys)
+  | "e0v1e" // NFI-family long scalper (EWO + CTI dip buys)
+  | "ichiv1_plus"; // HA Ichimoku fan scalper (entry-only port)
 
 export type StrategyId = HouseStrategyId | PortedStrategyId;
 /** "combo" = both house strategies layered (the desk default). */
