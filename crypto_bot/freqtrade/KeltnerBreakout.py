@@ -40,7 +40,6 @@ except ImportError:  # freqtrade là dependency tuỳ chọn — fallback thuầ
         startup_candle_count = 400
 
         def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        self._last_df = dataframe  # cho standalone/test ngoài freqtrade
             return dataframe
 
         def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -118,6 +117,7 @@ class KeltnerBreakout(IStrategy):
         return [(pair, self.informative_timeframe) for pair in pairs]
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        self._last_df = dataframe  # cho standalone/test ngoài freqtrade
         dataframe["kc_mid"] = ta.EMA(dataframe, timeperiod=self.kc_ema_len)
         dataframe["kc_atr"] = ta.ATR(dataframe, timeperiod=self.kc_atr_len)
         dataframe["kc_upper"] = dataframe["kc_mid"] + self.kc_mult * dataframe["kc_atr"]
@@ -125,9 +125,8 @@ class KeltnerBreakout(IStrategy):
         dataframe["adx"] = ta.ADX(dataframe, timeperiod=14)
         dataframe["ema200"] = ta.EMA(dataframe, timeperiod=200)
 
-        htf = self.dp.get_pair_dataframe(
-            metadata["pair"], self.informative_timeframe
-        ) if self.dp else None
+        dp = getattr(self, "dp", None)  # chưa được inject khi chạy standalone
+        htf = dp.get_pair_dataframe(metadata["pair"], self.informative_timeframe) if dp else None
         if htf is not None and not htf.empty:
             htf["htf_ema"] = ta.EMA(htf, timeperiod=self.htf_ema_len)
             # Chỉ dùng nến HTF ĐÃ ĐÓNG (shift 1) — không look-ahead.
