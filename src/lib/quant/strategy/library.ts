@@ -841,6 +841,20 @@ function portWeinsteinS2(ctx: PortCtx): void {
     else if (allowShort && falling && c < e && c <= ll) mark(bars[i]!, -1, "weinstein_s2");
   }
 }
+/** SMA Cross (E0V1E): SMA10/30 cross with a volume confirmation filter. */
+function portSmaCross(ctx: PortCtx): void {
+  const { bars, warmup, allowShort } = ctx;
+  const closes = bars.map((b) => b.close);
+  const fast = smaSeries(closes, 10);
+  const slow = smaSeries(closes, 30);
+  for (let i = warmup; i < bars.length; i++) {
+    // Volume confirmation: signal bar must trade above its 20-bar average.
+    if ((bars[i]!.volSpike ?? 0) < 1.0) continue;
+    if (crossover(fast, slow, i)) mark(bars[i]!, 1, "sma_cross");
+    else if (allowShort && crossunder(fast, slow, i)) mark(bars[i]!, -1, "sma_cross");
+  }
+}
+
 // --------------------------------- registry ---------------------------------
 
 export type StrategyMeta = {
@@ -1158,6 +1172,18 @@ export const STRATEGY_LIBRARY: StrategyMeta[] = [
       "Short mirror ở stage 4 (EMA200 giảm + đáy mới)",
     ],
   },
+  {
+    id: "sma_cross",
+    name: "SMA Cross Auto (E0V1E)",
+    origin: "CSDN · SMA cross tự động 10/30 + volume",
+    style: "Trend",
+    rules: [
+      "Long: SMA10 cắt LÊN SMA30 với volume ≥ SMA20 volume",
+      "Short: SMA10 cắt XUỐNG SMA30",
+      "SMA chậm hơn EMA cùng chu kỳ — tín hiệu ít nhiễu hơn, trễ hơn",
+      "Exit: tín hiệu đảo chiều (signal flip)",
+    ],
+  },
 ];
 
 
@@ -1192,6 +1218,7 @@ const PORTS: Record<PortedStrategyId, (ctx: PortCtx) => void> = {
   ma200_gravity: portMa200Gravity,
   tom: portTom,
   weinstein_s2: portWeinsteinS2,
+  sma_cross: portSmaCross,
 };
 
 /**

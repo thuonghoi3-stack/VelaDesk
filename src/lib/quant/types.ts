@@ -40,7 +40,8 @@ export type PortedStrategyId =
   | "high_52w" // 52-week-high breakout
   | "ma200_gravity" // ±5% band around SMA200, exit at the mean
   | "tom" // turn-of-the-month seasonality
-  | "weinstein_s2"; // Weinstein Stage 2 breakout
+  | "weinstein_s2" // Weinstein Stage 2 breakout
+  | "sma_cross"; // SMA 10/30 cross + volume (E0V1E)
 
 export type StrategyId = HouseStrategyId | PortedStrategyId;
 /** "combo" = both house strategies layered (the desk default). */

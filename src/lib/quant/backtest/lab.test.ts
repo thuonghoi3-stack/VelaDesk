@@ -42,7 +42,7 @@ test("compareStrategies returns the full library sorted by sharpe", () => {
   const cfg = defaultConfig({ warmup: 220 });
   const bars = barsFor(cfg);
   const rows = compareStrategies(bars, cfg, cfg.ltf);
-  assert.equal(rows.length, 31); // combo + 2 house + 28 ports
+  assert.equal(rows.length, 32); // combo + 2 house + 29 ports
   for (let i = 1; i < rows.length; i++) {
     assert.ok(rows[i - 1]!.metrics.sharpe >= rows[i]!.metrics.sharpe);
   }

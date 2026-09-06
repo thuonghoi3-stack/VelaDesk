@@ -14,8 +14,8 @@ function barsWith(cfg: DeskConfig, id: DeskConfig["strategyId"]): FeatureBar[] {
   }).ltf;
 }
 
-test("library registry has twenty-eight documented ports", () => {
-  assert.equal(STRATEGY_LIBRARY.length, 28);
+test("library registry has twenty-nine documented ports", () => {
+  assert.equal(STRATEGY_LIBRARY.length, 29);
   for (const s of STRATEGY_LIBRARY) {
     assert.ok(s.name.length > 0 && s.origin.length > 0 && s.rules.length >= 2);
   }
