@@ -27,6 +27,7 @@ import { STRATEGY_SELECT_OPTIONS } from "@/lib/quant/strategy/library";
 import type { DeskConfig, MarketType, Ohlcv } from "@/lib/quant/types";
 import { loadOhlcv } from "@/lib/quant/data/load-ohlcv";
 import { searchSymbols } from "@/lib/quant/data/symbols";
+import { getSourcePref, setSourcePref, getLastOkSource, setLastOkSource, type SourcePref } from "@/lib/terminal/data-prefs";
 import { buildDesk } from "@/lib/quant/pipeline";
 import {
   donchianOverlay,
@@ -165,6 +166,7 @@ export function ChartWorkspace({
   const [tool, setTool] = useState<DrawingTool>("cursor");
   const [drawings, setDrawings] = useState<Drawing[]>([]);
   const [replay, setReplay] = useState<{ index: number; playing: boolean } | null>(null);
+  const [sourcePref, setSourcePrefState] = useState<SourcePref>(() => getSourcePref());
   const chartApiRef = useRef<{ takeScreenshot: () => HTMLCanvasElement } | null>(null);
   // Stable callback — an inline arrow here would rebuild the chart every render.
   const onApiReadyStable = useCallback((api: { takeScreenshot: () => HTMLCanvasElement }) => {
@@ -190,7 +192,12 @@ export function ChartWorkspace({
   const [raw, setRaw] = useState<{ ltf: Ohlcv[]; htf: Ohlcv[]; market: MarketType } | null>(null);
 
   const load = useCallback(
-    async (sym: string, timeframe: Timeframe, sid: DeskConfig["strategyId"]) => {
+    async (
+      sym: string,
+      timeframe: Timeframe,
+      sid: DeskConfig["strategyId"],
+      preferredSource: "binance" | "okx" | null,
+    ) => {
       const seq = ++loadSeq.current;
       setLoading(true);
       setError(null);
@@ -204,9 +211,13 @@ export function ChartWorkspace({
             market: "usdm",
             ltfBars: budgetFor(timeframe),
             htfBars: htfBudget(htf),
+            preferred: preferredSource,
           },
         });
         if (loadSeq.current !== seq) return;
+        if (bundle.source === "binance" || bundle.source === "okx") {
+          setLastOkSource(bundle.source);
+        }
         setRaw({ ltf: bundle.ltf, htf: bundle.htf, market: bundle.market });
         setSource(bundle.source);
         setLoading(false);
@@ -230,8 +241,9 @@ export function ChartWorkspace({
   );
 
   useEffect(() => {
-    void load(symbol, tf, strategyId);
-  }, [symbol, tf, strategyId, load]);
+    // Sticky source: "auto" tries whatever worked last time first.
+    void load(symbol, tf, strategyId, sourcePref === "auto" ? getLastOkSource() : sourcePref);
+  }, [symbol, tf, strategyId, sourcePref, load]);
 
   // Strategy switch: re-signal the raw candles in place (ms, no refetch).
   useEffect(() => {
@@ -448,6 +460,21 @@ export function ChartWorkspace({
                 {t.label}
               </option>
             ))}
+          </select>
+
+          <select
+            className="h-8 rounded-md bg-surface-2 px-2 text-xs text-muted"
+            value={sourcePref}
+            onChange={(e) => {
+              const v = e.target.value as SourcePref;
+              setSourcePrefState(v);
+              setSourcePref(v);
+            }}
+            title="Nguồn dữ liệu nến — Auto nhớ nguồn thành công gần nhất"
+          >
+            <option value="auto">Nguồn: Auto</option>
+            <option value="binance">Binance</option>
+            <option value="okx">OKX</option>
           </select>
 
           <button

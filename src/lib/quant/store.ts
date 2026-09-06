@@ -5,6 +5,7 @@ import { generateSynthetic } from "./data/synthetic.ts";
 import { explainLastBar, type StrategyExplain } from "./explain.ts";
 import { loadOhlcv } from "./data/load-ohlcv.ts";
 import { applySignals, buildDesk, snapshotOf } from "./pipeline.ts";
+import { getLastOkSource, setLastOkSource, getSourcePref } from "../terminal/data-prefs.ts";
 import type {
   AnalysisSnapshot,
   BacktestResult,
@@ -142,6 +143,7 @@ export const useDesk = create<DeskState>()((set, get) => ({
     set({ loadSeq: seq, loading: true, error: null });
     const current = get().cfg;
     try {
+      const pref = getSourcePref();
       const bundle = await loadOhlcv({
         data: {
           symbol: current.symbol,
@@ -150,9 +152,13 @@ export const useDesk = create<DeskState>()((set, get) => ({
           market: current.market,
           ltfBars: budgetFor(current.ltf),
           htfBars: htfBudget(current.htf),
+          preferred: pref === "auto" ? getLastOkSource() : pref,
         },
       });
-      if (get().loadSeq !== seq) return; // superseded by a newer request
+      if (get().loadSeq !== seq) return;
+      if (bundle.source === "binance" || bundle.source === "okx") {
+        setLastOkSource(bundle.source);
+      } // superseded by a newer request
       get().ingest(bundle.ltf, bundle.htf, bundle.source, bundle.sourceNote, bundle.market);
       get().runBt();
     } catch (err) {

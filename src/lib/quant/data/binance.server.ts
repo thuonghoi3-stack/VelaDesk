@@ -178,34 +178,50 @@ async function fetchOne(
   tf: Timeframe,
   market: "spot" | "usdm",
   maxBars: number,
+  preferred?: "binance" | "okx",
 ): Promise<{ bars: Ohlcv[]; source: DataSource; market: MarketType }> {
-  const bases =
-    market === "usdm"
-      ? [
-          "https://fapi.binance.com/fapi/v1/klines",
-          "https://api.binance.com/api/v3/klines",
-        ]
-      : [
-          "https://api.binance.com/api/v3/klines",
-          "https://fapi.binance.com/fapi/v1/klines",
-        ];
-  for (const base of bases) {
-    try {
-      const bars = await fetchBinancePages(base, symbol, tf, maxBars);
-      if (bars.length >= 200) {
-        return { bars, source: "binance", market: base.includes("fapi") ? "usdm" : "spot" };
+  // Venue order honours the client's sticky preference: a venue that worked
+  // last time is tried first, skipping the failure penalty of blocked ones
+  // (Binance geo-blocks some deploy regions, e.g. Vercel US -> HTTP 451).
+  const binance = async (): Promise<{ bars: Ohlcv[]; source: DataSource; market: MarketType } | null> => {
+    const bases =
+      market === "usdm"
+        ? [
+            "https://fapi.binance.com/fapi/v1/klines",
+            "https://api.binance.com/api/v3/klines",
+          ]
+        : [
+            "https://api.binance.com/api/v3/klines",
+            "https://fapi.binance.com/fapi/v1/klines",
+          ];
+    for (const base of bases) {
+      try {
+        const bars = await fetchBinancePages(base, symbol, tf, maxBars);
+        if (bars.length >= 200) {
+          return { bars, source: "binance", market: base.includes("fapi") ? "usdm" : "spot" };
+        }
+      } catch {
+        /* try next */
       }
-    } catch {
-      /* try next */
     }
-  }
-  try {
-    const bars = await fetchOkx(symbol, tf, market, maxBars);
-    // OKX swap candles match the requested USDT-M market; OKX spot is the
-    // honest fallback for spot requests (no funding on either).
-    if (bars.length >= 200) return { bars, source: "okx", market };
-  } catch {
-    /* synthetic fallback */
+    return null;
+  };
+  const okx = async (): Promise<{ bars: Ohlcv[]; source: DataSource; market: MarketType } | null> => {
+    try {
+      const bars = await fetchOkx(symbol, tf, market, maxBars);
+      // OKX swap candles match the requested USDT-M market; OKX spot is the
+      // honest fallback for spot requests (no funding on either).
+      if (bars.length >= 200) return { bars, source: "okx", market };
+    } catch {
+      /* fall through */
+    }
+    return null;
+  };
+
+  const order = preferred === "okx" ? [okx, binance] : [binance, okx];
+  for (const attempt of order) {
+    const res = await attempt();
+    if (res) return res;
   }
   return { bars: [], source: "synthetic", market };
 }
@@ -228,10 +244,12 @@ export async function fetchMarketBundle(args: {
   market: "spot" | "usdm";
   ltfBars: number;
   htfBars: number;
+  /** Venue order hint (sticky client preference). Default: Binance first. */
+  preferred?: "binance" | "okx";
 }): Promise<MarketBundle> {
   const [ltfRes, htfRes] = await Promise.all([
-    fetchOne(args.symbol, args.ltf, args.market, args.ltfBars),
-    fetchOne(args.symbol, args.htf, args.market, args.htfBars),
+    fetchOne(args.symbol, args.ltf, args.market, args.ltfBars, args.preferred),
+    fetchOne(args.symbol, args.htf, args.market, args.htfBars, args.preferred),
   ]);
 
   if (ltfRes.bars.length >= 300 && htfRes.bars.length >= 80) {
