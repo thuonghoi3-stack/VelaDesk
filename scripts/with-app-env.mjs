@@ -20,8 +20,9 @@
  * `process.env`, which is why the merge has to happen before Vite starts.
  */
 import { spawn } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { constants as osConstants } from "node:os";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -88,6 +89,36 @@ export function projectRoot() {
 }
 
 /**
+ * Resolve `command` to a Node-runnable script from local `node_modules`.
+ *
+ * npm puts extensionless shims on `node_modules/.bin`; POSIX spawn can exec
+ * those, Windows cannot (`spawn("vite")` fails with ENOENT there). Resolving
+ * the package's own `bin` entry and running it with `process.execPath` works
+ * on every platform, keeps signal semantics (no shell in between) and needs
+ * no `.cmd` quoting — same script, same flags.
+ */
+export function resolveLocalBin(root, command) {
+  let pkgPath;
+  try {
+    const require = createRequire(join(root, "package.json"));
+    pkgPath = require.resolve(`${command}/package.json`);
+  } catch {
+    // Some packages gate "./package.json" behind their exports map; the plain
+    // layout path is the same file either way when installed at the top level.
+    pkgPath = join(root, "node_modules", command, "package.json");
+  }
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+    const bin = typeof pkg.bin === "string" ? pkg.bin : pkg?.bin?.[command];
+    if (typeof bin !== "string") return null;
+    const script = join(dirname(pkgPath), bin);
+    return existsSync(script) ? script : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Whether `moduleUrl` is the script node was asked to run.
  *
  * Both sides are resolved through symlinks: node realpaths `import.meta.url`
@@ -111,7 +142,10 @@ function main(argv) {
     process.exit(2);
   }
   const env = mergeAppEnv(readAppEnv(projectRoot()), process.env);
-  const child = spawn(command, args, { stdio: "inherit", env });
+  const binScript = resolveLocalBin(projectRoot(), command);
+  const child = binScript
+    ? spawn(process.execPath, [binScript, ...args], { stdio: "inherit", env })
+    : spawn(command, args, { stdio: "inherit", env });
   // The dev server is long-running and is stopped by signalling this wrapper.
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.on(signal, () => child.kill(signal));

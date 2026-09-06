@@ -24,7 +24,9 @@ export function EquityChart({ equity, buyHold }: Props) {
     t: p.time,
     strategy: p.equity,
     hold: bhMap.get(p.time),
+    dd: +(p.drawdown * 100).toFixed(2),
   }));
+  const hasDd = equity.some((p) => p.drawdown > 0);
   if (data.length === 0) {
     return <div className="rounded-lg bg-surface p-6 text-sm text-muted">Chưa có đường vốn.</div>;
   }
@@ -32,45 +34,82 @@ export function EquityChart({ equity, buyHold }: Props) {
     return <div className="h-56 w-full rounded-lg bg-surface md:h-64" />;
   }
   return (
-    <div className="h-56 w-full rounded-lg bg-surface p-2 md:h-64">
-      <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-          <defs>
-            <linearGradient id="eq" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#d8d4cc" stopOpacity={0.28} />
-              <stop offset="100%" stopColor="#d8d4cc" stopOpacity={0} />
-            </linearGradient>
-          </defs>
-          <CartesianGrid stroke="rgba(232,230,225,0.06)" vertical={false} />
-          <XAxis
-            dataKey="t"
-            tickFormatter={(v) => formatDateUtc(v).slice(2)}
-            tick={{ fill: "#8b8d94", fontSize: 10 }}
-            axisLine={false}
-            tickLine={false}
-            minTickGap={28}
-          />
-          <YAxis
-            tickFormatter={(v) => formatUsd(v, 0)}
-            tick={{ fill: "#8b8d94", fontSize: 10 }}
-            axisLine={false}
-            tickLine={false}
-            width={56}
-          />
-          <Tooltip
-            contentStyle={{
-              background: "#1a1d24",
-              border: "1px solid rgba(232,230,225,0.12)",
-              borderRadius: 8,
-              fontSize: 12,
-            }}
-            labelFormatter={(v) => formatDateUtc(Number(v))}
-            formatter={(value, name) => [formatUsd(Number(value)), name === "strategy" ? "Chiến lược" : "Buy & hold"]}
-          />
-          <Area type="monotone" dataKey="strategy" stroke="#d8d4cc" fill="url(#eq)" strokeWidth={1.5} />
-          <Area type="monotone" dataKey="hold" stroke="#7a8799" fill="none" strokeWidth={1} strokeDasharray="4 4" />
-        </AreaChart>
-      </ResponsiveContainer>
+    <div className="flex flex-col gap-2">
+      <div className="h-56 w-full rounded-lg bg-surface p-2 md:h-64">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+            <defs>
+              <linearGradient id="eq" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#d8d4cc" stopOpacity={0.28} />
+                <stop offset="100%" stopColor="#d8d4cc" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke="rgba(232,230,225,0.06)" vertical={false} />
+            <XAxis
+              dataKey="t"
+              tickFormatter={(v) => formatDateUtc(v).slice(2)}
+              tick={{ fill: "#8b8d94", fontSize: 10 }}
+              axisLine={false}
+              tickLine={false}
+              minTickGap={28}
+            />
+            <YAxis
+              tickFormatter={(v) => formatUsd(v, 0)}
+              tick={{ fill: "#8b8d94", fontSize: 10 }}
+              axisLine={false}
+              tickLine={false}
+              width={56}
+            />
+            <Tooltip
+              contentStyle={{
+                background: "#1a1d24",
+                border: "1px solid rgba(232,230,225,0.12)",
+                borderRadius: 8,
+                fontSize: 12,
+              }}
+              labelFormatter={(v) => formatDateUtc(Number(v))}
+              formatter={(value, name) => [formatUsd(Number(value)), name === "strategy" ? "Chiến lược" : "Buy & hold"]}
+            />
+            <Area type="monotone" dataKey="strategy" stroke="#d8d4cc" fill="url(#eq)" strokeWidth={1.5} />
+            <Area type="monotone" dataKey="hold" stroke="#7a8799" fill="none" strokeWidth={1} strokeDasharray="4 4" />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+      {hasDd ? (
+        <div className="h-20 w-full rounded-lg bg-surface p-2">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={data} margin={{ top: 2, right: 8, left: 0, bottom: 0 }}>
+              <defs>
+                <linearGradient id="dd" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#b85c4a" stopOpacity={0} />
+                  <stop offset="100%" stopColor="#b85c4a" stopOpacity={0.45} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="rgba(232,230,225,0.06)" vertical={false} />
+              <XAxis dataKey="t" hide />
+              <YAxis
+                reversed
+                tickFormatter={(v) => `${Number(v).toFixed(0)}%`}
+                tick={{ fill: "#8b8d94", fontSize: 10 }}
+                axisLine={false}
+                tickLine={false}
+                width={56}
+              />
+              <Tooltip
+                contentStyle={{
+                  background: "#1a1d24",
+                  border: "1px solid rgba(232,230,225,0.12)",
+                  borderRadius: 8,
+                  fontSize: 12,
+                }}
+                labelFormatter={(v) => formatDateUtc(Number(v))}
+                formatter={(value) => [`${Number(value).toFixed(2)}%`, "Drawdown"]}
+              />
+              <Area type="monotone" dataKey="dd" stroke="#b85c4a" strokeWidth={1} fill="url(#dd)" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      ) : null}
     </div>
   );
 }

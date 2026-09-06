@@ -21,17 +21,18 @@ def add_regime(df: pd.DataFrame) -> pd.DataFrame:
 def map_htf(ltf: pd.DataFrame, htf: pd.DataFrame, htf_rule: str) -> pd.DataFrame:
     """Attach last *closed* HTF bar. HTF bar starting at t is closed at t + rule."""
     out = ltf.copy()
-    h = htf.copy()
     delta = pd.Timedelta(htf_rule.replace("m", "min"))
-    h = h.add_prefix("htf_")
-    h["htf_close_time"] = h.index + delta
-    # merge_asof backward on LTF open vs HTF close time
-    left = out.reset_index().rename(columns={"index": "time"})
-    if "time" not in left.columns:
-        left = out.reset_index()
-        left = left.rename(columns={left.columns[0]: "time"})
-    right = h.reset_index().rename(columns={h.reset_index().columns[0]: "htf_open"})
-    right["htf_available"] = right["htf_open"] + delta
+    h = htf.add_prefix("htf_")
+    right = h.reset_index()
+    # NB: the prefixed frame already has a real "htf_open" COLUMN, so the index
+    # column must get a non-colliding name — renaming it "htf_open" would
+    # create duplicates and `right["htf_open"]` would silently return a frame.
+    right = right.rename(columns={right.columns[0]: "htf_bar_open"})
+    right["htf_available"] = right["htf_bar_open"] + delta
+    left = out.reset_index()
+    left = left.rename(columns={left.columns[0]: "time"})
+    # merge_asof backward on LTF open time vs HTF close time: the HTF bar is
+    # only visible after it closed — no look-ahead.
     merged = pd.merge_asof(
         left.sort_values("time"),
         right.sort_values("htf_available"),

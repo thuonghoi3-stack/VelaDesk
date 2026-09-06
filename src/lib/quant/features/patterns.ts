@@ -1,4 +1,4 @@
-import type { FeatureBar, PatternHit, PatternName } from "../types";
+import type { FeatureBar, PatternHit, PatternName } from "../types.ts";
 
 function body(bar: FeatureBar): number {
   return Math.abs(bar.close - bar.open);

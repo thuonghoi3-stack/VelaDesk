@@ -1,19 +1,27 @@
-import { INTERVAL_MS } from "../config";
-import { generateSynthetic } from "./synthetic";
-import type { DataSource, Ohlcv, Timeframe } from "../types";
+import { INTERVAL_MS } from "../config.ts";
+import { generateSynthetic } from "./synthetic.ts";
+import type { DataSource, MarketType, Ohlcv, Timeframe } from "../types.ts";
 
 const BINANCE_TF: Record<Timeframe, string> = {
+  "5m": "5m",
   "15m": "15m",
+  "30m": "30m",
   "1h": "1h",
+  "2h": "2h",
   "4h": "4h",
   "1d": "1d",
+  "1w": "1w",
 };
 
 const OKX_TF: Record<Timeframe, string> = {
+  "5m": "5m",
   "15m": "15m",
+  "30m": "30m",
   "1h": "1H",
+  "2h": "2H",
   "4h": "4H",
   "1d": "1Dutc",
+  "1w": "1Wutc",
 };
 
 export type MarketBundle = {
@@ -21,6 +29,8 @@ export type MarketBundle = {
   htf: Ohlcv[];
   source: DataSource;
   sourceNote: string;
+  /** The market the returned candles actually are — a USDT-M request may fall back to spot. */
+  market: MarketType;
 };
 
 function toSymbol(sym: string): string {
@@ -39,7 +49,10 @@ function parseBinance(row: unknown[]): Ohlcv | null {
   return { time, open, high, low, close, volume };
 }
 
-async function getJson(url: string, timeoutMs = 5000): Promise<unknown> {
+async function getJson(url: string, timeoutMs = 12_000): Promise<unknown> {
+  // 12s default: a multi-page klines backfill is sequential, and a 5s budget
+  // made the whole bundle fall back to synthetic on a merely slow — not
+  // down — venue API.
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -60,36 +73,33 @@ async function fetchBinancePages(
   tf: Timeframe,
   maxBars: number,
 ): Promise<Ohlcv[]> {
+  // Deep backtesting: up to 60 pages (60k bars) per series. Pages are windows
+  // of 1000 bars with known startTime, so they fetch in PARALLEL — a 3-year
+  // 1h backfill is ~27 requests instead of 27 sequential round-trips.
+  const pages = Math.min(60, Math.ceil(maxBars / 1000));
   const interval = INTERVAL_MS[tf];
-  const out: Ohlcv[] = [];
-  let endTime: number | undefined;
-  const pages = Math.min(4, Math.ceil(maxBars / 1000));
-  for (let p = 0; p < pages; p++) {
-    const params = new URLSearchParams({
-      symbol: toSymbol(symbol),
-      interval: BINANCE_TF[tf],
-      limit: "1000",
-    });
-    if (endTime) params.set("endTime", String(endTime));
-    const data = await getJson(`${base}?${params.toString()}`);
-    if (!Array.isArray(data) || data.length === 0) break;
-    const chunk: Ohlcv[] = [];
-    for (const row of data) {
-      if (Array.isArray(row)) {
-        const b = parseBinance(row as unknown[]);
-        if (b) chunk.push(b);
-      }
-    }
-    if (chunk.length === 0) break;
-    out.unshift(...chunk);
-    const first = chunk[0]!.time;
-    endTime = first - 1;
-    if (chunk.length < 1000) break;
-    if (out.length >= maxBars) break;
-    void interval;
-  }
+  const firstStart = Date.now() - maxBars * interval;
+  const chunks = await Promise.all(
+    Array.from({ length: pages }, (_, p) =>
+      getJson(
+        `${base}?${new URLSearchParams({
+          symbol: toSymbol(symbol),
+          interval: BINANCE_TF[tf],
+          limit: "1000",
+          startTime: String(firstStart + p * 1000 * interval),
+        }).toString()}`,
+      ).catch(() => null),
+    ),
+  );
   const byTime = new Map<number, Ohlcv>();
-  for (const b of out) byTime.set(b.time, b);
+  for (const data of chunks) {
+    if (!Array.isArray(data)) continue;
+    for (const row of data) {
+      if (!Array.isArray(row)) continue;
+      const b = parseBinance(row as unknown[]);
+      if (b) byTime.set(b.time, b);
+    }
+  }
   return [...byTime.values()].sort((a, b) => a.time - b.time).slice(-maxBars);
 }
 
@@ -119,10 +129,12 @@ async function fetchOkx(symbol: string, tf: Timeframe, maxBars: number): Promise
   return out.sort((a, b) => a.time - b.time);
 }
 
-async function fetchOne(symbol: string, tf: Timeframe, market: "spot" | "usdm", maxBars: number): Promise<{
-  bars: Ohlcv[];
-  source: DataSource;
-}> {
+async function fetchOne(
+  symbol: string,
+  tf: Timeframe,
+  market: "spot" | "usdm",
+  maxBars: number,
+): Promise<{ bars: Ohlcv[]; source: DataSource; market: MarketType }> {
   const bases =
     market === "usdm"
       ? [
@@ -137,7 +149,7 @@ async function fetchOne(symbol: string, tf: Timeframe, market: "spot" | "usdm", 
     try {
       const bars = await fetchBinancePages(base, symbol, tf, maxBars);
       if (bars.length >= 200) {
-        return { bars, source: base.includes("fapi") ? "binance" : "binance" };
+        return { bars, source: "binance", market: base.includes("fapi") ? "usdm" : "spot" };
       }
     } catch {
       /* try next */
@@ -145,11 +157,22 @@ async function fetchOne(symbol: string, tf: Timeframe, market: "spot" | "usdm", 
   }
   try {
     const bars = await fetchOkx(symbol, tf, maxBars);
-    if (bars.length >= 200) return { bars, source: "okx" };
+    if (bars.length >= 200) return { bars, source: "okx", market: "spot" };
   } catch {
     /* synthetic fallback */
   }
-  return { bars: [], source: "synthetic" };
+  return { bars: [], source: "synthetic", market };
+}
+
+/** Best-effort klines only (no bundle gating) — used by the watchlist sparks. */
+export async function fetchKlines(
+  symbol: string,
+  tf: Timeframe,
+  market: MarketType,
+  maxBars: number,
+): Promise<Ohlcv[]> {
+  const res = await fetchOne(symbol, tf, market, maxBars);
+  return res.bars;
 }
 
 export async function fetchMarketBundle(args: {
@@ -166,13 +189,20 @@ export async function fetchMarketBundle(args: {
   ]);
 
   if (ltfRes.bars.length >= 300 && htfRes.bars.length >= 80) {
+    // Only claim USDT-M when BOTH series came from the futures API — otherwise
+    // funding would be charged on spot candles the exchange never financed.
+    const actualMarket: MarketType =
+      ltfRes.market === "usdm" && htfRes.market === "usdm" ? "usdm" : "spot";
     const src = ltfRes.source;
+    const fellBack = actualMarket !== args.market;
     return {
       ltf: ltfRes.bars,
       htf: htfRes.bars,
       source: src,
-      sourceNote:
-        src === "okx"
+      market: actualMarket,
+      sourceNote: fellBack
+        ? `Yêu cầu ${args.market === "usdm" ? "USDT-M" : "spot"} nhưng sàn chỉ trả dữ liệu ${actualMarket === "usdm" ? "USDT-M" : "spot"} — desk đã chuyển sang ${actualMarket === "usdm" ? "USDT-M" : "spot"} (funding chỉ tính cho USDT-M).`
+        : src === "okx"
           ? "Nến từ OKX public API (fallback). Không cần API key."
           : "Nến từ Binance public klines. Không cần API key. Khớp lệnh backtest vẫn là next-bar.",
     };
@@ -182,6 +212,7 @@ export async function fetchMarketBundle(args: {
     ltf: generateSynthetic(args.symbol, args.ltf, args.ltfBars),
     htf: generateSynthetic(args.symbol, args.htf, args.htfBars),
     source: "synthetic",
+    market: args.market,
     sourceNote:
       "Sàn public API không tới được từ máy chủ. Đang dùng nến mô phỏng regime-switching (bull / crash / range) — chỉ để chạy desk, không phải giá thật.",
   };

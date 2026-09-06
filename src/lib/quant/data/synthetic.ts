@@ -1,6 +1,6 @@
-import { INTERVAL_MS, maxBarsForTf } from "../config";
-import { hashSeed, mulberry32 } from "../math";
-import type { Ohlcv, Timeframe } from "../types";
+import { INTERVAL_MS, maxBarsForTf } from "../config.ts";
+import { hashSeed, mulberry32 } from "../math.ts";
+import type { Ohlcv, Timeframe } from "../types.ts";
 
 type RegimeSpec = { bars: number; drift: number; vol: number };
 

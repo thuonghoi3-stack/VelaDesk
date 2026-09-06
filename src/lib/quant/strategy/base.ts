@@ -1,4 +1,4 @@
-import type { FeatureBar } from "../types";
+import type { FeatureBar } from "../types.ts";
 
 export type RuleCheck = {
   id: string;
@@ -12,7 +12,19 @@ export type SignalContext = {
   i: number;
   tradeVolatility: boolean;
   allowShort: boolean;
+  /** Strategy Tester inputs — defaults reproduce the classic rule values. */
+  volSpikeMin?: number;
+  mrRsiLongMax?: number;
+  mrRsiShortMin?: number;
+  mrAdxMax?: number;
 };
+
+export const SIGNAL_DEFAULTS = {
+  volSpikeMin: 1.2,
+  mrRsiLongMax: 30,
+  mrRsiShortMin: 70,
+  mrAdxMax: 20,
+} as const;
 
 export function barAt(ctx: SignalContext, offset = 0): FeatureBar | null {
   const idx = ctx.i + offset;

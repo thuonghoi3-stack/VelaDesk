@@ -1,11 +1,11 @@
-import { defaultConfig } from "./config";
-import { cleanOhlcv } from "./data/cleaner";
-import { lastPatterns, latestIndicators, scoreConfluence } from "./features/confluence";
-import { applyRegime, computeIndicators } from "./features/indicators";
-import { applyPatterns } from "./features/patterns";
-import { mapHtfToLtf } from "./features/regime";
-import { applyMeanReversion } from "./strategy/mean-reversion";
-import { applyTrendPullback } from "./strategy/trend-pullback";
+import { cleanOhlcv } from "./data/cleaner.ts";
+import { lastPatterns, latestIndicators, scoreConfluence } from "./features/confluence.ts";
+import { applyRegime, computeIndicators } from "./features/indicators.ts";
+import { applyPatterns } from "./features/patterns.ts";
+import { mapHtfToLtf } from "./features/regime.ts";
+import { applyLibraryStrategy } from "./strategy/library.ts";
+import { applyMeanReversion } from "./strategy/mean-reversion.ts";
+import { applyTrendPullback } from "./strategy/trend-pullback.ts";
 import type {
   AnalysisSnapshot,
   DataSource,
@@ -13,7 +13,7 @@ import type {
   FeatureBar,
   Ohlcv,
   Timeframe,
-} from "./types";
+} from "./types.ts";
 
 export function enrichSeries(raw: Ohlcv[], tf: Timeframe): FeatureBar[] {
   const clean = cleanOhlcv(raw, tf);
@@ -31,14 +31,59 @@ export function buildDesk(
   const ltf = enrichSeries(ltfRaw, cfg.ltf);
   const htf = enrichSeries(htfRaw, cfg.htf);
   mapHtfToLtf(ltf, htf, cfg.htf);
+  // applySignals is pure — it returns fresh copies carrying the signal columns.
+  return { ltf: applySignals(ltf, cfg), htf };
+}
+
+/**
+ * Reset and re-apply both strategy signal passes from the CURRENT config
+ * inputs. Enriched columns (indicators/patterns) are causal and stay valid —
+ * only the signal fields are recomputed, so input edits re-run in ms.
+ */
+export function applySignals(bars: FeatureBar[], cfg: DeskConfig): FeatureBar[] {
+  const out = bars.map((b) => ({
+    ...b,
+    signal: 0 as const,
+    signalReason: "",
+    strategy: "none" as const,
+  }));
   const allowShort = cfg.side === "both";
-  applyTrendPullback(ltf, {
-    tradeVolatility: cfg.tradeVolatility,
-    allowShort,
-    warmup: cfg.warmup,
-  });
-  applyMeanReversion(ltf, { allowShort, warmup: cfg.warmup });
-  return { ltf, htf };
+  const warmup = cfg.warmup;
+  if (cfg.strategyId === "combo") {
+    // Desk default: both house strategies layered (TP wins ties — applied first).
+    applyTrendPullback(out, {
+      tradeVolatility: cfg.tradeVolatility,
+      allowShort,
+      warmup,
+      volSpikeMin: cfg.volSpikeMin,
+    });
+    applyMeanReversion(out, {
+      allowShort,
+      warmup,
+      mrRsiLongMax: cfg.mrRsiLongMax,
+      mrRsiShortMin: cfg.mrRsiShortMin,
+      mrAdxMax: cfg.mrAdxMax,
+    });
+  } else if (cfg.strategyId === "trend_pullback") {
+    applyTrendPullback(out, {
+      tradeVolatility: cfg.tradeVolatility,
+      allowShort,
+      warmup,
+      volSpikeMin: cfg.volSpikeMin,
+    });
+  } else if (cfg.strategyId === "mean_reversion") {
+    applyMeanReversion(out, {
+      allowShort,
+      warmup,
+      mrRsiLongMax: cfg.mrRsiLongMax,
+      mrRsiShortMin: cfg.mrRsiShortMin,
+      mrAdxMax: cfg.mrAdxMax,
+    });
+  } else {
+    // Ported TradingView strategy — each port is self-contained.
+    applyLibraryStrategy(out, cfg.strategyId, cfg);
+  }
+  return out;
 }
 
 export function snapshotOf(
@@ -92,8 +137,4 @@ export function snapshotOf(
     pendingReason: last.signalReason,
     pendingStrategy: last.strategy,
   };
-}
-
-export function withConfig(partial?: Partial<DeskConfig>): DeskConfig {
-  return defaultConfig(partial);
 }

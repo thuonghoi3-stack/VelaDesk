@@ -1,4 +1,4 @@
-import type { EquityPoint, LosingPeriod, Metrics, Regime, Trade } from "../types";
+import type { EquityPoint, LosingPeriod, Metrics, Regime, Trade } from "../types.ts";
 
 function dailyReturns(equity: EquityPoint[]): number[] {
   if (equity.length < 2) return [];
@@ -119,7 +119,7 @@ export function findLosingPeriods(
         top && n
           ? `Regime chiếm đa số: ${top[0].replace("_", " ")} (${((top[1] / n) * 100).toFixed(0)}% nến).`
           : "Không đủ dữ liệu regime.";
-      out.push({ start, end, drawdown: dd, regimeMix: mix, note });
+      out.push({ start, end, troughTime, drawdown: dd, regimeMix: mix, note });
     }
     inDd = false;
   };
@@ -144,7 +144,6 @@ export function findLosingPeriods(
     }
   }
   if (equity.length) flush(equity[equity.length - 1]!.time);
-  void troughTime;
   return out.sort((a, b) => b.drawdown - a.drawdown).slice(0, 5);
 }
 

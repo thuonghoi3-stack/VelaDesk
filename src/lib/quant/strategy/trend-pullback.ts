@@ -1,4 +1,4 @@
-import type { FeatureBar } from "../types";
+import type { FeatureBar } from "../types.ts";
 import {
   type RuleCheck,
   type SignalContext,
@@ -10,14 +10,15 @@ import {
   pulledBackShort,
   rsiDippedThenLifted,
   rsiPeakedThenDropped,
-} from "./base";
+  SIGNAL_DEFAULTS,
+} from "./base.ts";
 
 export function explainTrendLong(ctx: SignalContext): RuleCheck[] {
   const bar = ctx.bars[ctx.i]!;
   const volOk = !bar.extremeVol || ctx.tradeVolatility;
   const rsiOk = rsiDippedThenLifted(ctx.bars, ctx.i, 40, 52);
   const macdOk = macdRising(ctx.bars, ctx.i);
-  const volSpike = (bar.volSpike ?? 0) >= 1.2;
+  const volSpike = (bar.volSpike ?? 0) >= (ctx.volSpikeMin ?? SIGNAL_DEFAULTS.volSpikeMin);
   return [
     {
       id: "htf_up",
@@ -45,7 +46,7 @@ export function explainTrendLong(ctx: SignalContext): RuleCheck[] {
     },
     {
       id: "volume",
-      label: "Volume ≥ 1.2 × SMA20",
+      label: `Volume ≥ ${ctx.volSpikeMin ?? SIGNAL_DEFAULTS.volSpikeMin} × SMA20`,
       pass: volSpike,
       detail: `spike=${fmt(bar.volSpike)}`,
     },
@@ -94,8 +95,8 @@ export function explainTrendShort(ctx: SignalContext): RuleCheck[] {
     },
     {
       id: "volume",
-      label: "Volume ≥ 1.2 × SMA20",
-      pass: (bar.volSpike ?? 0) >= 1.2,
+      label: `Volume ≥ ${ctx.volSpikeMin ?? SIGNAL_DEFAULTS.volSpikeMin} × SMA20`,
+      pass: (bar.volSpike ?? 0) >= (ctx.volSpikeMin ?? SIGNAL_DEFAULTS.volSpikeMin),
       detail: `spike=${fmt(bar.volSpike)}`,
     },
     {
@@ -138,7 +139,7 @@ function fmt(v: number | null | undefined): string {
 /** Apply trend-pullback signals; does not overwrite an existing non-zero signal. */
 export function applyTrendPullback(
   bars: FeatureBar[],
-  opts: { tradeVolatility: boolean; allowShort: boolean; warmup: number },
+  opts: { tradeVolatility: boolean; allowShort: boolean; warmup: number; volSpikeMin?: number },
 ): void {
   for (let i = opts.warmup; i < bars.length; i++) {
     if (bars[i]!.signal !== 0) continue;
@@ -147,6 +148,7 @@ export function applyTrendPullback(
       i,
       tradeVolatility: opts.tradeVolatility,
       allowShort: opts.allowShort,
+      volSpikeMin: opts.volSpikeMin,
     });
     if (signal !== 0) {
       bars[i]!.signal = signal;

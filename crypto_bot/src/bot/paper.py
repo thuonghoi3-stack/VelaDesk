@@ -19,9 +19,10 @@ from ..strategy.trend_pullback import generate_signals as tp_signals
 logger = logging.getLogger("vela.paper")
 
 
-def build_frame(symbol: str, ltf: str, htf: str, cfg: dict):
-    raw_l = fetch_ohlcv(symbol, ltf, exchange=cfg.get("exchange", "binance"), market=cfg.get("market", "usdm"), cache_dir=cfg.get("cache_dir", "./data/cache"))
-    raw_h = fetch_ohlcv(symbol, htf, exchange=cfg.get("exchange", "binance"), market=cfg.get("market", "usdm"), cache_dir=cfg.get("cache_dir", "./data/cache"))
+def build_frame(symbol: str, ltf: str, htf: str, cfg: dict, *, max_age_s: float | None = None):
+    lookback = int(cfg.get("lookback_days", 900))
+    raw_l = fetch_ohlcv(symbol, ltf, exchange=cfg.get("exchange", "binance"), market=cfg.get("market", "usdm"), cache_dir=cfg.get("cache_dir", "./data/cache"), since_days=lookback, max_age_s=max_age_s)
+    raw_h = fetch_ohlcv(symbol, htf, exchange=cfg.get("exchange", "binance"), market=cfg.get("market", "usdm"), cache_dir=cfg.get("cache_dir", "./data/cache"), since_days=lookback, max_age_s=max_age_s)
     l = add_regime(add_patterns(add_indicators(clean_ohlcv(raw_l, ltf))))
     h = add_regime(add_patterns(add_indicators(clean_ohlcv(raw_h, htf))))
     l = map_htf(l, h, htf)
@@ -30,9 +31,9 @@ def build_frame(symbol: str, ltf: str, htf: str, cfg: dict):
     return l
 
 
-def paper_once(cfg: dict, symbol: str, out_dir: str = "./reports") -> dict:
+def paper_once(cfg: dict, symbol: str, out_dir: str = "./reports", *, max_age_s: float | None = None) -> dict:
     ltf, htf = cfg["ltf"], cfg["htf"]
-    df = build_frame(symbol, ltf, htf, cfg)
+    df = build_frame(symbol, ltf, htf, cfg, max_age_s=max_age_s)
     last = df.iloc[-1]
     result = run_backtest(df, {**cfg, "time_stop": cfg.get("time_stop_bars", {}).get(ltf, 24)})
     snapshot = {
@@ -55,11 +56,15 @@ def paper_once(cfg: dict, symbol: str, out_dir: str = "./reports") -> dict:
 
 
 def loop(cfg: dict, interval_sec: int = 60) -> None:
-    """Polling loop for paper. Ctrl+C to stop. Does not place live orders."""
+    """Polling loop for paper. Ctrl+C to stop. Does not place live orders.
+
+    Each pass refreshes stale caches incrementally (max_age_s = interval), so
+    new bars actually reach the signals instead of re-reading a frozen cache.
+    """
     while True:
         for symbol in cfg.get("symbols", ["BTC/USDT"]):
             try:
-                paper_once(cfg, symbol)
+                paper_once(cfg, symbol, max_age_s=interval_sec)
             except Exception:
                 logger.exception("paper failed for %s", symbol)
         time.sleep(interval_sec)

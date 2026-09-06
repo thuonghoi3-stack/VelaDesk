@@ -1,7 +1,7 @@
-import type { DeskConfig, FeatureBar } from "./types";
-import type { RuleCheck } from "./strategy/base";
-import { explainTrendLong, explainTrendShort } from "./strategy/trend-pullback";
-import { explainMrLong, explainMrShort } from "./strategy/mean-reversion";
+import type { DeskConfig, FeatureBar } from "./types.ts";
+import type { RuleCheck } from "./strategy/base.ts";
+import { explainTrendLong, explainTrendShort } from "./strategy/trend-pullback.ts";
+import { explainMrLong, explainMrShort } from "./strategy/mean-reversion.ts";
 
 export type StrategyExplain = {
   trendLong: RuleCheck[];
@@ -21,6 +21,10 @@ export function explainLastBar(bars: FeatureBar[], cfg: DeskConfig): StrategyExp
     i: bars.length - 1,
     tradeVolatility: cfg.tradeVolatility,
     allowShort: cfg.side === "both",
+    volSpikeMin: cfg.volSpikeMin,
+    mrRsiLongMax: cfg.mrRsiLongMax,
+    mrRsiShortMin: cfg.mrRsiShortMin,
+    mrAdxMax: cfg.mrAdxMax,
   };
   const trendLong = explainTrendLong(ctx);
   const trendShort = explainTrendShort(ctx);

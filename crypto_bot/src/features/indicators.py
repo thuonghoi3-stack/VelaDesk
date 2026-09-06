@@ -23,7 +23,11 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["rsi"] = _rsi(c, 14)
     macd = _ema(c, 12) - _ema(c, 26)
     out["macd"] = macd
-    out["macd_signal"] = _ema(macd.fillna(0), 9)
+    # Seed the signal EMA with the first finite MACD value (not 0) so the
+    # early histogram is not dragged toward zero by the warmup gap.
+    first = macd.dropna()
+    seed_val = float(first.iloc[0]) if len(first) else 0.0
+    out["macd_signal"] = _ema(macd.fillna(seed_val), 9)
     out["macd_hist"] = out["macd"] - out["macd_signal"]
     prev_c = c.shift(1)
     tr = pd.concat([(h - l), (h - prev_c).abs(), (l - prev_c).abs()], axis=1).max(axis=1)

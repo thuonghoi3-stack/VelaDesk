@@ -6,6 +6,8 @@ Past performance does not guarantee future results.
 
 from __future__ import annotations
 
+import numpy as np
+import pandas as pd
 from pandas import DataFrame
 
 try:
@@ -32,17 +34,35 @@ except ImportError:  # freqtrade is optional
             return dataframe
 
     class ta:  # type: ignore
+        """Pure-pandas fallbacks so the sketch is testable without TA-Lib.
+
+        They implement the real formulas — a constant RSI/ADX here would make
+        the entry conditions silently dead outside freqtrade.
+        """
+
+        @staticmethod
+        def _wilder(s, timeperiod):
+            return s.ewm(alpha=1 / timeperiod, adjust=False, min_periods=timeperiod).mean()
+
         @staticmethod
         def EMA(df, timeperiod=20):
             return df["close"].ewm(span=timeperiod, adjust=False).mean()
 
         @staticmethod
         def RSI(df, timeperiod=14):
-            return df["close"] * 0 + 50
+            d = df["close"].diff()
+            gain = d.clip(lower=0)
+            loss = -d.clip(upper=0)
+            rs = ta._wilder(gain, timeperiod) / ta._wilder(loss, timeperiod).replace(0, pd.NA)
+            return 100 - 100 / (1 + rs)
 
         @staticmethod
         def ATR(df, timeperiod=14):
-            return (df["high"] - df["low"]).rolling(timeperiod).mean()
+            prev = df["close"].shift(1)
+            tr = pd.concat(
+                [df["high"] - df["low"], (df["high"] - prev).abs(), (df["low"] - prev).abs()], axis=1
+            ).max(axis=1)
+            return ta._wilder(tr, timeperiod)
 
         @staticmethod
         def MACD(df, fastperiod=12, slowperiod=26, signalperiod=9):
@@ -51,7 +71,15 @@ except ImportError:  # freqtrade is optional
 
         @staticmethod
         def ADX(df, timeperiod=14):
-            return df["close"] * 0 + 20
+            up = df["high"].diff()
+            down = -df["low"].diff()
+            plus_dm = pd.Series(np.where((up > down) & (up > 0), up, 0.0), index=df.index)
+            minus_dm = pd.Series(np.where((down > up) & (down > 0), down, 0.0), index=df.index)
+            atr = ta.ATR(df, timeperiod)
+            pdi = 100 * ta._wilder(plus_dm, timeperiod) / atr.replace(0, pd.NA)
+            mdi = 100 * ta._wilder(minus_dm, timeperiod) / atr.replace(0, pd.NA)
+            dx = 100 * (pdi - mdi).abs() / (pdi + mdi).replace(0, pd.NA)
+            return ta._wilder(dx, timeperiod)
 
 
 class TrendPullback(IStrategy):

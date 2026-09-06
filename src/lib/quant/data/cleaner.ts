@@ -1,5 +1,5 @@
-import { INTERVAL_MS } from "../config";
-import type { Ohlcv, Timeframe } from "../types";
+import { INTERVAL_MS } from "../config.ts";
+import type { Ohlcv, Timeframe } from "../types.ts";
 
 const EPS = 1e-12;
 

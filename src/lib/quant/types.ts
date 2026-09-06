@@ -1,8 +1,45 @@
-export type Timeframe = "15m" | "1h" | "4h" | "1d";
+export type Timeframe = "5m" | "15m" | "30m" | "1h" | "2h" | "4h" | "1d" | "1w";
 export type MarketType = "spot" | "usdm";
 export type TradeSide = "long_only" | "both";
 export type Regime = "trending_up" | "trending_down" | "ranging" | "mixed";
-export type DataSource = "binance" | "binance_us" | "bitget" | "okx" | "synthetic";
+export type DataSource = "binance" | "okx" | "synthetic";
+
+/** House strategies (the two this desk was built around). */
+export type HouseStrategyId = "trend_pullback" | "mean_reversion";
+
+/**
+ * Strategies ported from TradingView Pine Script. Entries follow the Pine
+ * default execution model (signal at bar close, fill at next bar open);
+ * exits are adapted to the VelaDesk risk engine (see strategy/library.ts).
+ */
+export type PortedStrategyId =
+  | "macd" // TV built-in "MACD Strategy"
+  | "rsi_reversion" // TV built-in "RSI Strategy"
+  | "bb_reversion" // TV built-in "Bollinger Bands Strategy"
+  | "stoch_reversion" // TV built-in "Stochastic Strategy"
+  | "supertrend" // classic "Supertrend" (ATR 10, factor 3)
+  | "ema_cross" // classic "EMA Cross" (golden/death)
+  | "donchian" // Turtle-style Donchian channel breakout
+  | "ichimoku" // Ichimoku Cloud (tenkan/kijun cross + cloud filter)
+  | "keltner" // Keltner channel breakout (EMA20 ± 2×ATR10)
+  | "rsi2" // Larry Connors RSI 2-period reversion + EMA200 filter
+  | "squeeze" // TTM Squeeze (BB inside Keltner → release breakout)
+  | "psar" // Parabolic SAR flip (Wilder 0.02/0.02/0.2)
+  | "ha_trend" // Heikin Ashi color flip + EMA50 filter
+  | "fisher" // Ehlers Fisher Transform (9) cross
+  | "vwap_fade" // VWAP session z-score fade (100, ±2σ)
+  | "turtle_s1" // Turtle System 1: 20-bar entry, 10-bar channel exit
+  | "turtle_s2" // Turtle System 2: 55-bar entry, 20-bar channel exit
+  | "donchian_trend" // 55-bar entry + EMA200 filter, signal-flip exit
+  | "scalper_ema" // EMA 9/21 scalper cross
+  | "stoch_rsi" // Stochastic RSI (14/14/3/3)
+  | "vwap_reclaim" // session VWAP reclaim/loss
+  | "orb" // opening range breakout (6 bars, UTC day)
+  | "rsi7_momentum"; // RSI(7) 50-line momentum
+
+export type StrategyId = HouseStrategyId | PortedStrategyId;
+/** "combo" = both house strategies layered (the desk default). */
+export type StrategySelection = "combo" | StrategyId;
 
 export type Ohlcv = {
   time: number;
@@ -60,7 +97,7 @@ export type FeatureBar = Ohlcv & {
   htfBias: -1 | 0 | 1;
   signal: -1 | 0 | 1;
   signalReason: string;
-  strategy: "trend_pullback" | "mean_reversion" | "none";
+  strategy: StrategyId | "none";
 };
 
 export type PositionSide = "long" | "short";
@@ -68,7 +105,7 @@ export type PositionSide = "long" | "short";
 export type OpenPosition = {
   id: string;
   side: PositionSide;
-  strategy: "trend_pullback" | "mean_reversion";
+  strategy: StrategyId;
   entryTime: number;
   entryBar: number;
   entry: number;
@@ -79,16 +116,26 @@ export type OpenPosition = {
   tp2: number;
   riskPerUnit: number;
   initialRiskUsdt: number;
+  /** Funding charged while the position has been open — attributed pro-rata to each partial exit. */
+  fundingPaid: number;
   barsHeld: number;
   tp1Done: boolean;
   trailed: boolean;
   rReached: number;
+  /** Worst adverse excursion in R seen while open. */
+  maeR: number;
+  /** SIGNAL_EXIT strategies: no TP caps, no time stop — exit on opposite signal. */
+  signalExit: boolean;
+  /** Turtle channel exit: close beyond the opposite N-bar channel ends the trade. */
+  exitChannelBars?: number;
 };
 
 export type Trade = {
   id: string;
+  /** Set by the portfolio engine; single-symbol backtests leave it undefined. */
+  symbol?: string;
   side: PositionSide;
-  strategy: "trend_pullback" | "mean_reversion";
+  strategy: StrategyId;
   entryTime: number;
   exitTime: number;
   entry: number;
@@ -96,6 +143,9 @@ export type Trade = {
   qty: number;
   pnl: number;
   pnlR: number;
+  /** Best and worst excursion during the trade, in R (risk units). */
+  mfeR: number;
+  maeR: number;
   fees: number;
   funding: number;
   reason: string;
@@ -135,6 +185,8 @@ export type Metrics = {
 export type LosingPeriod = {
   start: number;
   end: number;
+  /** Time of the deepest drawdown point inside [start, end]. */
+  troughTime: number;
   drawdown: number;
   regimeMix: Record<Regime, number>;
   note: string;
@@ -210,6 +262,45 @@ export type DeskConfig = {
   tradeVolatility: boolean;
   timeStopBars: number;
   warmup: number;
+  /** Which strategy drives signals: "combo" layers both house strategies. */
+  strategyId: StrategySelection;
+  /** Port discipline: block ported signals against the ADX regime (trend
+   * ports need ADX ≥ 20, reversion ports need ADX < 20) — same rule the two
+   * house strategies apply. Turn off to see raw Pine behavior. */
+  regimeFilterPorts: boolean;
+  // — Ported-strategy inputs (TradingView equivalents) —
+  /** Supertrend factor (ATR period fixed at 10, TV default 3). */
+  /** Keltner channel construction (port `keltner`). */
+  kcEmaLen: number;
+  kcAtrLen: number;
+  kcMult: number;
+  /** ADX regime-gate threshold for ported strategies (trend ≥, reversion <). */
+  portAdxMin: number;
+  stAtrMult: number;
+  /** Donchian breakout channel length (Turtle default 20). */
+  donEntryLen: number;
+  /** EMA cross lengths (classic 20/50; 50/200 = golden/death). */
+  emaFastLen: number;
+  emaSlowLen: number;
+  /** Stochastic built-in thresholds (TV default 20/80). */
+  stochLo: number;
+  stochHi: number;
+  // — Strategy Tester inputs (TV-style: editable, re-run on change) —
+  /** Trend pullback: volume must exceed volSpikeMin × SMA20 on the signal bar. */
+  volSpikeMin: number;
+  /** Stop distance clamp in ATR multiples (swing-stop strategy). */
+  stopAtrMin: number;
+  stopAtrMax: number;
+  /** Mean reversion: fixed ATR stop multiple. */
+  mrStopAtr: number;
+  mrRsiLongMax: number;
+  mrRsiShortMin: number;
+  mrAdxMax: number;
+  /** Exit ladder: TP1 at tp1R (close tp1ClosePct), TP2 at tp2R, break-even after breakevenR. */
+  tp1R: number;
+  tp2R: number;
+  breakevenR: number;
+  tp1ClosePct: number;
 };
 
 export type PaperEvent = {

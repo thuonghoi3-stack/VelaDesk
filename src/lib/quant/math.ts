@@ -1,17 +1,7 @@
 /** Small numeric helpers shared by indicators, risk, and backtest. */
 
-export const EPS = 1e-12;
-
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
-}
-
-export function lastFinite(values: Array<number | null>, from: number): number | null {
-  for (let i = from; i >= 0; i--) {
-    const v = values[i];
-    if (v != null && Number.isFinite(v)) return v;
-  }
-  return null;
 }
 
 export function smaAt(src: number[], i: number, period: number): number | null {
@@ -32,20 +22,6 @@ export function stdevAt(src: number[], i: number, period: number, ddof = 0): num
   const n = period - ddof;
   if (n <= 0) return null;
   return Math.sqrt(acc / n);
-}
-
-export function rollingMin(src: number[], i: number, period: number): number | null {
-  if (i + 1 < period) return null;
-  let m = src[i - period + 1]!;
-  for (let k = i - period + 2; k <= i; k++) if (src[k]! < m) m = src[k]!;
-  return m;
-}
-
-export function rollingMax(src: number[], i: number, period: number): number | null {
-  if (i + 1 < period) return null;
-  let m = src[i - period + 1]!;
-  for (let k = i - period + 2; k <= i; k++) if (src[k]! > m) m = src[k]!;
-  return m;
 }
 
 /** Seeded PRNG — mulberry32. Deterministic synthetic candles. */

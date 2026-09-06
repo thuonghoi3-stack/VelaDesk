@@ -1,14 +1,21 @@
-import type { FeatureBar } from "../types";
-import { type RuleCheck, type SignalContext, bandwidthSqueezeRelease } from "./base";
+import type { FeatureBar } from "../types.ts";
+import {
+  type RuleCheck,
+  SIGNAL_DEFAULTS,
+  type SignalContext,
+  bandwidthSqueezeRelease,
+} from "./base.ts";
 
 export function explainMrLong(ctx: SignalContext): RuleCheck[] {
   const bar = ctx.bars[ctx.i]!;
   const squeeze = bandwidthSqueezeRelease(ctx.bars, ctx.i);
+  const adxMax = ctx.mrAdxMax ?? SIGNAL_DEFAULTS.mrAdxMax;
+  const rsiMax = ctx.mrRsiLongMax ?? SIGNAL_DEFAULTS.mrRsiLongMax;
   return [
     {
       id: "ranging",
-      label: "Regime ranging (ADX < 20)",
-      pass: (bar.adx ?? 99) < 20 && bar.htfBias === 0,
+      label: `Regime ranging (ADX < ${adxMax})`,
+      pass: (bar.adx ?? 99) < adxMax && bar.htfBias === 0,
       detail: `ADX=${fmt(bar.adx)} htfBias=${bar.htfBias}`,
     },
     {
@@ -19,8 +26,8 @@ export function explainMrLong(ctx: SignalContext): RuleCheck[] {
     },
     {
       id: "rsi",
-      label: "RSI < 30",
-      pass: bar.rsi != null && bar.rsi < 30,
+      label: `RSI < ${rsiMax}`,
+      pass: bar.rsi != null && bar.rsi < rsiMax,
       detail: `RSI=${fmt(bar.rsi)}`,
     },
     {
@@ -35,11 +42,13 @@ export function explainMrLong(ctx: SignalContext): RuleCheck[] {
 export function explainMrShort(ctx: SignalContext): RuleCheck[] {
   const bar = ctx.bars[ctx.i]!;
   const squeeze = bandwidthSqueezeRelease(ctx.bars, ctx.i);
+  const adxMax = ctx.mrAdxMax ?? SIGNAL_DEFAULTS.mrAdxMax;
+  const rsiMin = ctx.mrRsiShortMin ?? SIGNAL_DEFAULTS.mrRsiShortMin;
   return [
     {
       id: "ranging",
-      label: "Regime ranging (ADX < 20)",
-      pass: (bar.adx ?? 99) < 20 && bar.htfBias === 0,
+      label: `Regime ranging (ADX < ${adxMax})`,
+      pass: (bar.adx ?? 99) < adxMax && bar.htfBias === 0,
       detail: `ADX=${fmt(bar.adx)} htfBias=${bar.htfBias}`,
     },
     {
@@ -50,8 +59,8 @@ export function explainMrShort(ctx: SignalContext): RuleCheck[] {
     },
     {
       id: "rsi",
-      label: "RSI > 70",
-      pass: bar.rsi != null && bar.rsi > 70,
+      label: `RSI > ${rsiMin}`,
+      pass: bar.rsi != null && bar.rsi > rsiMin,
       detail: `RSI=${fmt(bar.rsi)}`,
     },
     {
@@ -78,7 +87,13 @@ export function meanReversionSignal(ctx: SignalContext): {
 
 export function applyMeanReversion(
   bars: FeatureBar[],
-  opts: { allowShort: boolean; warmup: number },
+  opts: {
+    allowShort: boolean;
+    warmup: number;
+    mrRsiLongMax?: number;
+    mrRsiShortMin?: number;
+    mrAdxMax?: number;
+  },
 ): void {
   for (let i = opts.warmup; i < bars.length; i++) {
     if (bars[i]!.signal !== 0) continue;
@@ -87,6 +102,9 @@ export function applyMeanReversion(
       i,
       tradeVolatility: false,
       allowShort: opts.allowShort,
+      mrRsiLongMax: opts.mrRsiLongMax,
+      mrRsiShortMin: opts.mrRsiShortMin,
+      mrAdxMax: opts.mrAdxMax,
     });
     if (signal !== 0) {
       bars[i]!.signal = signal;

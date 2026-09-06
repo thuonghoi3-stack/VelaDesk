@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { checkedOutputPath, checkedUrl } from "./browser-guard.mjs";
 import { computeBrandWarnings } from "./brand-check.mjs";
@@ -26,11 +27,24 @@ if (args.error) {
   process.exit(1);
 }
 
+// The Grok sandbox pins QA output under /workspace. On a normal checkout
+// (Windows, plain Linux clone) /workspace does not exist, so the repo's own
+// screenshots/ directory is the equivalent safe home — sandbox behavior is
+// unchanged where /workspace exists.
+const SANDBOX_ROOT = "/workspace";
+const sandboxExists = existsSync(SANDBOX_ROOT);
+const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const remapSandboxPath = (p) =>
+  sandboxExists || !p.startsWith(`${SANDBOX_ROOT}/`)
+    ? p
+    : join(PROJECT_ROOT, p.slice(SANDBOX_ROOT.length + 1));
+const allowedRoots = sandboxExists ? [SANDBOX_ROOT] : [PROJECT_ROOT];
+
 const url = checkedUrl(args.url);
-const outPng = checkedOutputPath(args.outPng, ["/workspace"]);
+const outPng = checkedOutputPath(remapSandboxPath(args.outPng), allowedRoots);
 const derived = derivedPaths(outPng);
-const mobilePng = checkedOutputPath(derived.mobilePng, ["/workspace"]);
-const outJson = checkedOutputPath(derived.verdictJson, ["/workspace"], "verdict JSON");
+const mobilePng = checkedOutputPath(derived.mobilePng, allowedRoots);
+const outJson = checkedOutputPath(derived.verdictJson, allowedRoots, "verdict JSON");
 
 const MAX_BASELINE_BYTES = 1024 * 1024;
 const baselineRequested = Boolean(args.baseline);
@@ -38,7 +52,7 @@ let baselinePath = null;
 let baselineResolveError = null;
 if (baselineRequested) {
   try {
-    baselinePath = checkedOutputPath(realpathSync(args.baseline), ["/workspace"], "baseline");
+    baselinePath = checkedOutputPath(realpathSync(remapSandboxPath(args.baseline)), allowedRoots, "baseline");
   } catch (err) {
     baselineResolveError = err?.code ?? "unresolvable path";
   }
@@ -102,7 +116,16 @@ try {
       viewport: { width: vp.width, height: vp.height },
     });
     page.on("console", (msg) => {
-      if (msg.type() === "error") errors.consoleErrors.push(msg.text());
+      if (msg.type() !== "error") return;
+      // Platform chrome, not the app: the Grok app-builder branding script is
+      // injected onto every HTML response; outside grok.com the browser
+      // refuses it with ERR_BLOCKED_BY_RESPONSE. In the sandbox it loads fine,
+      // so this filter is inert there.
+      const loc = msg.location()?.url ?? "";
+      if (/grok\.com\/grok-app-builder\//.test(loc) && /ERR_BLOCKED_BY_RESPONSE/.test(msg.text())) {
+        return;
+      }
+      errors.consoleErrors.push(msg.text());
     });
     page.on("pageerror", (err) => errors.pageErrors.push(String(err?.message || err)));
     // `domcontentloaded`, not `networkidle`: Vite keeps an HMR websocket open, so
@@ -110,6 +133,13 @@ try {
     const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
     const status = resp?.status() ?? 0;
     await page.waitForTimeout(1000);
+    // Give async-seeded charts a chance to attach before judging content;
+    // the count below still records the truth if none ever appears.
+    await page
+      .locator("canvas")
+      .first()
+      .waitFor({ state: "attached", timeout: 8000 })
+      .catch(() => {});
 
     const title = await page.title();
     const hasCanvas = (await page.locator("canvas").count()) > 0;
@@ -140,7 +170,11 @@ try {
     };
   }
 
-  const brandWarnings = computeBrandWarnings({ hasCanvas: viewports.desktop.hasCanvas });
+  const brandWarnings = computeBrandWarnings({
+    hasCanvas: viewports.desktop.hasCanvas,
+    // Off-sandbox the brand assets live in this checkout, not under /workspace.
+    workspaceRoot: sandboxExists ? SANDBOX_ROOT : PROJECT_ROOT,
+  });
   // Only a dev server answers /__app-env, so smoking the built output reads as
   // indeterminate — report a divergence, never the absence of an observation.
   const authWarnings = authInvariantWarnings(

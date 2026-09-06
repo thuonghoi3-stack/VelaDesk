@@ -1,6 +1,6 @@
-import { INTERVAL_MS } from "../config";
-import type { FeatureBar, Timeframe } from "../types";
-import { applyRegime } from "./indicators";
+import { INTERVAL_MS } from "../config.ts";
+import type { FeatureBar, Timeframe } from "../types.ts";
+import { applyRegime } from "./indicators.ts";
 
 /**
  * Map last *closed* HTF bar onto each LTF bar.

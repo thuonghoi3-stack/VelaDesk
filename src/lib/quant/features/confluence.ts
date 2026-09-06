@@ -1,4 +1,4 @@
-import type { AnalysisSnapshot, FeatureBar, PatternHit } from "../types";
+import type { AnalysisSnapshot, FeatureBar, PatternHit } from "../types.ts";
 
 function clip(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n));

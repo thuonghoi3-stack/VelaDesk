@@ -8,9 +8,10 @@ import logging
 from pathlib import Path
 
 import yaml
+from dotenv import load_dotenv
 
-from .bot.paper import build_frame, paper_once
 from .backtest.engine import run_backtest
+from .bot.paper import build_frame, paper_once, loop
 from .report.charts import write_html_report
 
 
@@ -19,11 +20,15 @@ def load_cfg(path: str) -> dict:
 
 
 def main() -> None:
+    # API keys always come from the environment / .env — never hard-coded.
+    load_dotenv()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     p = argparse.ArgumentParser(description="Vela crypto_bot")
     p.add_argument("cmd", choices=["analyze", "backtest", "paper"])
     p.add_argument("--config", default="config.yaml")
     p.add_argument("--symbol", default=None)
+    p.add_argument("--loop", action="store_true", help="paper only: keep polling instead of one snapshot")
+    p.add_argument("--interval", type=int, default=60, help="paper loop interval in seconds")
     args = p.parse_args()
     cfg = load_cfg(args.config)
     symbol = args.symbol or cfg["symbols"][0]
@@ -35,8 +40,17 @@ def main() -> None:
     elif args.cmd == "backtest":
         df = build_frame(symbol, cfg["ltf"], cfg["htf"], cfg)
         res = run_backtest(df, {**cfg, "time_stop": cfg.get("time_stop_bars", {}).get(cfg["ltf"], 24)})
-        print(json.dumps({"metrics": res.metrics_all, "test": res.metrics_test, "claim": res.claim_reason, "buy_hold": res.buy_hold}, indent=2, default=str))
+        print(json.dumps({
+            "metrics": res.metrics_all,
+            "test": res.metrics_test,
+            "claim": res.claim_reason,
+            "buy_hold": res.buy_hold,
+            "walk_forward": res.folds,
+            "halt_days": res.halt_days,
+        }, indent=2, default=str))
         write_html_report(df.tail(500), res.equity, f"reports/{symbol.replace('/', '')}_bt.html")
+    elif args.loop:
+        loop(cfg, interval_sec=args.interval)
     else:
         print(json.dumps(paper_once(cfg, symbol), indent=2))
 

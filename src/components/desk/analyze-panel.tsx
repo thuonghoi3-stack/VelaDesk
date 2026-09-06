@@ -104,6 +104,22 @@ export function AnalyzePanel() {
           <Cell k="ATR / ATR SMA20" v={`${fmt(analysis.indicators.atr)} / ${fmt(analysis.indicators.atrSma20)}`} />
           <Cell k="BB width" v={fmt(analysis.indicators.bbWidth, 4)} />
           <Cell k="Vol spike" v={fmt(analysis.indicators.volSpike)} />
+          <div className="mt-3 rounded-lg bg-surface-2 p-3">
+            <p className="text-[11px] tracking-wide text-muted uppercase">Tín hiệu ở nến đóng cuối</p>
+            <p
+              className={`mt-1 text-sm font-medium ${
+                analysis.pendingSignal === 1 ? "text-long" : analysis.pendingSignal === -1 ? "text-short" : "text-muted"
+              }`}
+            >
+              {analysis.pendingSignal === 1
+                ? "LONG — chờ khớp open kế tiếp"
+                : analysis.pendingSignal === -1
+                  ? "SHORT — chờ khớp open kế tiếp"
+                  : "Không có lệnh chờ"}
+              {analysis.pendingStrategy !== "none" ? ` · ${analysis.pendingStrategy}` : ""}
+            </p>
+            {analysis.pendingReason ? <p className="mt-1 text-[11px] text-subtle">{analysis.pendingReason}</p> : null}
+          </div>
         </div>
 
         <div className="rounded-xl bg-surface p-4">

@@ -1,5 +1,6 @@
-import { dailyLossBreached, fundingCharge, isFundingBar, utcDay } from "../risk/limits";
-import { applySlippage, feeOn, planStop, sizeQty } from "../risk/sizer";
+import { dailyLossBreached, fundingCharge, isFundingBar, utcDay } from "../risk/limits.ts";
+import { CHANNEL_EXIT, REVERSION_CLASS, SIGNAL_EXIT_CLASS } from "../strategy/library.ts";
+import { applySlippage, feeOn, planStop, sizeQty } from "../risk/sizer.ts";
 import type {
   BacktestResult,
   DeskConfig,
@@ -10,8 +11,8 @@ import type {
   Timeframe,
   Trade,
   WalkFold,
-} from "../types";
-import { claimGate, computeMetrics, findLosingPeriods } from "./metrics";
+} from "../types.ts";
+import { claimGate, computeMetrics, findLosingPeriods } from "./metrics.ts";
 
 let tradeSeq = 1;
 
@@ -25,7 +26,10 @@ export type EngineSnapshot = {
 
 /**
  * Event-driven simulator. Signals at close[t] fill at open[t+1] (next-bar).
- * Intrabar SL vs TP: stop is assumed first (pessimistic).
+ * Intrabar fills are resolved pessimistically: if a stop and a take-profit are
+ * both touchable in the same bar, the STOP fills first. Take-profits fill at
+ * their limit prices; a bar reaching TP2 has necessarily crossed TP1, so both
+ * partial fills execute in that bar.
  */
 export class SimEngine {
   readonly bars: FeatureBar[];
@@ -42,6 +46,7 @@ export class SimEngine {
   dailyHaltDays = 0;
   private dayPnl = 0;
   private dayKey = "";
+  private dayStartEquity: number;
   private startEquity: number;
   private halted = false;
 
@@ -51,6 +56,7 @@ export class SimEngine {
     this.tf = tf;
     this.startEquity = cfg.equity;
     this.equity = cfg.equity;
+    this.dayStartEquity = cfg.equity;
     this.peak = cfg.equity;
     this.i = startIndex ?? cfg.warmup;
   }
@@ -59,6 +65,7 @@ export class SimEngine {
     this.i = startIndex ?? this.cfg.warmup;
     this.equity = this.cfg.equity;
     this.startEquity = this.cfg.equity;
+    this.dayStartEquity = this.cfg.equity;
     this.peak = this.cfg.equity;
     this.position = null;
     this.trades = [];
@@ -85,14 +92,37 @@ export class SimEngine {
       if (this.halted) this.dailyHaltDays += 1;
       this.dayKey = key;
       this.dayPnl = 0;
+      // The daily loss cap is measured against equity at the START of the day.
+      this.dayStartEquity = this.equityCurve.length
+        ? this.equityCurve[this.equityCurve.length - 1]!.equity
+        : this.startEquity;
       this.halted = false;
     }
 
     let event: PaperEvent | null = null;
     if (this.position) {
       this.chargeFunding(bar);
-      event = this.managePosition(bar) ?? event;
-      this.exposedBars += 1;
+      // SIGNAL_EXIT profile: an opposite signal from the SAME strategy closes
+      // the position at this bar's open (Pine reverses exactly like this),
+      // and the fresh signal may open the reverse trade at the same open.
+      const sigBar = this.i > 0 ? this.bars[this.i - 1]! : null;
+      if (
+        this.position.signalExit &&
+        sigBar &&
+        sigBar.signal !== 0 &&
+        sigBar.strategy === this.position.strategy
+      ) {
+        const opposite = this.position.side === "long" ? sigBar.signal === -1 : sigBar.signal === 1;
+        if (opposite) {
+          event = this.closePosition(bar, bar.open, "signal_flip", this.position.remainingQty) ?? event;
+        }
+      }
+      if (this.position) {
+        event = this.managePosition(bar) ?? event;
+      }
+      if (this.position) {
+        this.exposedBars += 1;
+      }
     }
 
     if (!this.position && !this.halted && this.i > 0) {
@@ -107,7 +137,7 @@ export class SimEngine {
     const dd = this.peak > 0 ? (this.peak - mtm) / this.peak : 0;
     this.equityCurve.push({ time: bar.time, equity: mtm, drawdown: dd });
 
-    if (dailyLossBreached(this.dayPnl, this.startEquity, this.cfg)) {
+    if (dailyLossBreached(this.dayPnl, this.dayStartEquity, this.cfg)) {
       if (!this.halted) {
         this.halted = true;
         event = { time: bar.time, kind: "halt", message: "Daily loss cap — dừng vào lệnh mới trong ngày UTC." };
@@ -134,7 +164,8 @@ export class SimEngine {
     const fee = fundingCharge(notional, this.cfg, this.tf);
     this.equity -= fee;
     this.dayPnl -= fee;
-    this.position.initialRiskUsdt += 0;
+    // Kept on the position so each exit trade can report its funding share.
+    this.position.fundingPaid += fee;
     if (fee >= 0.01) {
       this.events.push({
         time: bar.time,
@@ -150,7 +181,12 @@ export class SimEngine {
     const strategy = sigBar.strategy === "none" ? "trend_pullback" : sigBar.strategy;
     const rawOpen = fillBar.open;
     const fill = applySlippage(rawOpen, side, true, this.cfg.slippageBps);
-    const plan = planStop(this.bars, this.i - 1, side, strategy, sigBar.close);
+    const plan = planStop(this.bars, this.i - 1, side, strategy, sigBar.close, {
+      stopAtrMin: this.cfg.stopAtrMin,
+      stopAtrMax: this.cfg.stopAtrMax,
+      mrStopAtr: this.cfg.mrStopAtr,
+      swingLookback: 8,
+    });
     if (!plan) return null;
     // Rebuild stop around actual fill, keep distance.
     const stop = side === "long" ? fill - plan.dist : fill + plan.dist;
@@ -159,6 +195,8 @@ export class SimEngine {
     if (side === "long" && fillBar.low <= stop) return null;
     if (side === "short" && fillBar.high >= stop) return null;
 
+    const signalExit =
+      SIGNAL_EXIT_CLASS.has(strategy) || CHANNEL_EXIT[strategy] !== undefined;
     const qty = sizeQty(this.equity, this.cfg, fill, riskPerUnit);
     if (qty <= 0) return null;
 
@@ -176,20 +214,37 @@ export class SimEngine {
       qty,
       remainingQty: qty,
       stop,
-      tp1: side === "long" ? fill + 1.5 * riskPerUnit : fill - 1.5 * riskPerUnit,
-      tp2: side === "long" ? fill + 2.5 * riskPerUnit : fill - 2.5 * riskPerUnit,
+      tp1: signalExit
+        ? side === "long"
+          ? Number.POSITIVE_INFINITY
+          : Number.NEGATIVE_INFINITY
+        : side === "long"
+          ? fill + this.cfg.tp1R * riskPerUnit
+          : fill - this.cfg.tp1R * riskPerUnit,
+      tp2: signalExit
+        ? side === "long"
+          ? Number.POSITIVE_INFINITY
+          : Number.NEGATIVE_INFINITY
+        : side === "long"
+          ? fill + this.cfg.tp2R * riskPerUnit
+          : fill - this.cfg.tp2R * riskPerUnit,
       riskPerUnit,
       initialRiskUsdt: qty * riskPerUnit,
+      fundingPaid: 0,
       barsHeld: 0,
       tp1Done: false,
       trailed: false,
       rReached: 0,
+      maeR: 0,
+      signalExit,
+      exitChannelBars: CHANNEL_EXIT[strategy],
     };
-    if (strategy === "mean_reversion" && sigBar.bbMid != null) {
+    if (REVERSION_CLASS.has(strategy) && sigBar.bbMid != null) {
       pos.tp1 = sigBar.bbMid;
       pos.tp2 = sigBar.bbMid;
     }
     this.position = pos;
+    this.exposedBars += 1; // the entry bar is already exposed
     const ev: PaperEvent = {
       time: fillBar.time,
       kind: "fill",
@@ -204,8 +259,10 @@ export class SimEngine {
     pos.barsHeld += 1;
     const fav = pos.side === "long" ? bar.high - pos.entry : pos.entry - bar.low;
     pos.rReached = Math.max(pos.rReached, fav / pos.riskPerUnit);
+    const adv = pos.side === "long" ? pos.entry - bar.low : bar.high - pos.entry;
+    pos.maeR = Math.max(pos.maeR, adv / pos.riskPerUnit);
 
-    if (pos.rReached >= 1 && !pos.trailed) {
+    if (pos.rReached >= this.cfg.breakevenR && !pos.trailed) {
       const be = pos.side === "long"
         ? pos.entry * (1 + this.cfg.takerFee * 2)
         : pos.entry * (1 - this.cfg.takerFee * 2);
@@ -214,16 +271,38 @@ export class SimEngine {
       pos.trailed = true;
     }
 
+    // Turtle-style channel exit: a CLOSE beyond the opposite N-bar channel
+    // (channel computed on bars strictly before this one) ends the trade.
+    if (pos.exitChannelBars) {
+      const n = pos.exitChannelBars;
+      const from = Math.max(0, this.i - n);
+      if (this.i - from >= n) {
+        if (pos.side === "long") {
+          let ll = this.bars[from]!.low;
+          for (let k = from + 1; k < this.i; k++) ll = Math.min(ll, this.bars[k]!.low);
+          if (bar.close < ll) {
+            return this.closePosition(bar, bar.close, "channel_exit", pos.remainingQty);
+          }
+        } else {
+          let hh = this.bars[from]!.high;
+          for (let k = from + 1; k < this.i; k++) hh = Math.max(hh, this.bars[k]!.high);
+          if (bar.close > hh) {
+            return this.closePosition(bar, bar.close, "channel_exit", pos.remainingQty);
+          }
+        }
+      }
+    }
+
     const hitStop = pos.side === "long" ? bar.low <= pos.stop : bar.high >= pos.stop;
-    const hitTp1 = pos.side === "long" ? bar.high >= pos.tp1 : bar.low <= pos.tp1;
-    const hitTp2 = pos.side === "long" ? bar.high >= pos.tp2 : bar.low <= pos.tp2;
+    const hitTp1 = !pos.signalExit && (pos.side === "long" ? bar.high >= pos.tp1 : bar.low <= pos.tp1);
+    const hitTp2 = !pos.signalExit && (pos.side === "long" ? bar.high >= pos.tp2 : bar.low <= pos.tp2);
 
     if (hitStop) {
       return this.closePosition(bar, pos.stop, "stop", pos.remainingQty);
     }
 
     if (!pos.tp1Done && hitTp1) {
-      const qty = pos.remainingQty * 0.5;
+      const qty = pos.remainingQty * this.cfg.tp1ClosePct;
       const ev = this.closePosition(bar, pos.tp1, "tp1", qty);
       if (this.position) this.position.tp1Done = true;
       if (hitTp2 && this.position) {
@@ -243,7 +322,7 @@ export class SimEngine {
       if (emaFlip) return this.closePosition(bar, bar.close, "ema_macd_exit", pos.remainingQty);
     }
 
-    if (pos.barsHeld >= this.cfg.timeStopBars) {
+    if (!pos.signalExit && pos.barsHeld >= this.cfg.timeStopBars) {
       return this.closePosition(bar, bar.close, "time_stop", pos.remainingQty);
     }
     return null;
@@ -258,6 +337,10 @@ export class SimEngine {
     const fee = feeOn(fillQty * px, this.cfg.takerFee);
     const pnl = gross - fee;
     const pnlR = pos.riskPerUnit > 0 ? (px - pos.entry) * (pos.side === "long" ? 1 : -1) / pos.riskPerUnit : 0;
+    // Funding was charged to equity while open; report it per trade pro-rata
+    // by closed qty so the trade log reconciles with the equity curve.
+    const fundingShare = (fillQty / Math.max(pos.qty, 1e-12)) * pos.fundingPaid;
+    pos.fundingPaid -= fundingShare;
     this.equity += pnl;
     this.dayPnl += pnl;
     this.trades.push({
@@ -271,8 +354,10 @@ export class SimEngine {
       qty: fillQty,
       pnl,
       pnlR,
+      mfeR: pos.rReached,
+      maeR: pos.maeR,
       fees: fee,
-      funding: 0,
+      funding: fundingShare,
       reason,
       barsHeld: pos.barsHeld,
     });
@@ -328,6 +413,8 @@ function buyHold(bars: FeatureBar[], cfg: DeskConfig): { equity: EquityPoint[]; 
       qty,
       pnl: last - cfg.equity,
       pnlR: 0,
+      mfeR: 0,
+      maeR: 0,
       fees: entryFee,
       funding: 0,
       reason: "buy_hold",

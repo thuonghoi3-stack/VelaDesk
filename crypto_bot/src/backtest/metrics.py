@@ -25,6 +25,8 @@ def metrics(equity: pd.Series, trades: pd.DataFrame, start_equity: float, expose
     mdd = max_drawdown(equity)
     gp = float(trades.loc[trades["pnl"] > 0, "pnl"].sum()) if len(trades) else 0.0
     gl = float(-trades.loc[trades["pnl"] <= 0, "pnl"].sum()) if len(trades) else 0.0
+    wins = trades.loc[trades["pnl"] > 0, "pnl"] if len(trades) else pd.Series(dtype=float)
+    losses = trades.loc[trades["pnl"] <= 0, "pnl"] if len(trades) else pd.Series(dtype=float)
     return {
         "cagr": cagr,
         "sharpe": sharpe,
@@ -38,6 +40,15 @@ def metrics(equity: pd.Series, trades: pd.DataFrame, start_equity: float, expose
         "trades": int(len(trades)),
         "exposure": exposed / max(len(equity), 1),
         "end_equity": end,
+        "start_equity": start_equity,
+        "days": days,
+        "bars": int(len(equity)),
+        "gross_profit": gp,
+        "gross_loss": gl,
+        "avg_win": float(wins.mean()) if len(wins) else 0.0,
+        "avg_loss": float(losses.mean()) if len(losses) else 0.0,
+        "best": float(trades["pnl"].max()) if len(trades) else 0.0,
+        "worst": float(trades["pnl"].min()) if len(trades) else 0.0,
     }
 
 

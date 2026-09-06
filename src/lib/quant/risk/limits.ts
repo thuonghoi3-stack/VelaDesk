@@ -1,5 +1,4 @@
-import { INTERVAL_MS } from "../config";
-import type { DeskConfig, Timeframe } from "../types";
+import type { DeskConfig, Timeframe } from "../types.ts";
 
 export function utcDay(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
@@ -30,8 +29,4 @@ export function dailyLossBreached(
   cfg: DeskConfig,
 ): boolean {
   return dayPnl <= -cfg.dailyLossCap * startEquity;
-}
-
-export function barsUntilFundingHint(tf: Timeframe): number {
-  return Math.max(1, Math.round((8 * 60 * 60 * 1000) / INTERVAL_MS[tf]));
 }

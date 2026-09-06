@@ -4,11 +4,11 @@ import { fetchMarketBundle } from "./binance.server";
 
 const Schema = z.object({
   symbol: z.string().min(3).max(20),
-  ltf: z.enum(["15m", "1h", "4h", "1d"]),
-  htf: z.enum(["15m", "1h", "4h", "1d"]),
+  ltf: z.enum(["5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w"]),
+  htf: z.enum(["5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w"]),
   market: z.enum(["spot", "usdm"]),
-  ltfBars: z.number().int().min(400).max(12_000),
-  htfBars: z.number().int().min(200).max(4_000),
+  ltfBars: z.number().int().min(400).max(120_000),
+  htfBars: z.number().int().min(200).max(20_000),
 });
 
 export const loadOhlcv = createServerFn({ method: "POST" })

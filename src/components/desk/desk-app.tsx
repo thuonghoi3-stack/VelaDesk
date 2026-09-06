@@ -1,38 +1,26 @@
-import { type ReactNode } from "react";
-import { AlertTriangle, CandlestickChart, LoaderCircle } from "lucide-react";
+import { type ReactNode, useEffect } from "react";
+import { Link } from "@tanstack/react-router";
+import { AlertTriangle, LoaderCircle } from "lucide-react";
 import { AnalyzePanel } from "@/components/desk/analyze-panel";
-import { BacktestPanel } from "@/components/desk/backtest-panel";
+import { TesterPanel } from "@/components/desk/tester-panel";
 import { CodePanel } from "@/components/desk/code-panel";
 import { PaperPanel } from "@/components/desk/paper-panel";
 import { StrategyPanel } from "@/components/desk/strategy-panel";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { loadOhlcv } from "@/lib/quant/data/load-ohlcv";
-import { SYMBOLS, TIME_STOP } from "@/lib/quant/config";
+import { SYMBOLS, TIME_STOP, UNIVERSE_SYMBOLS } from "@/lib/quant/config";
+import { STRATEGY_SELECT_OPTIONS } from "@/lib/quant/strategy/library";
 import { useDesk, type DeskTab } from "@/lib/quant/store";
-import type { Timeframe } from "@/lib/quant/types";
+import type { DeskConfig, Timeframe } from "@/lib/quant/types";
 import { cn } from "@/lib/utils";
 
 const TABS: { id: DeskTab; label: string }[] = [
   { id: "analyze", label: "Phân tích" },
   { id: "strategy", label: "Chiến lược" },
-  { id: "backtest", label: "Backtest" },
+  { id: "backtest", label: "Tester" },
   { id: "paper", label: "Replay" },
   { id: "code", label: "Python" },
 ];
-
-function barBudget(tf: Timeframe): number {
-  switch (tf) {
-    case "15m":
-      return 2500;
-    case "1h":
-      return 5000;
-    case "4h":
-      return 3200;
-    case "1d":
-      return 1200;
-  }
-}
 
 export function DeskApp() {
   const cfg = useDesk((s) => s.cfg);
@@ -41,37 +29,18 @@ export function DeskApp() {
   const setTab = useDesk((s) => s.setTab);
   const loading = useDesk((s) => s.loading);
   const error = useDesk((s) => s.error);
-  const ingest = useDesk((s) => s.ingest);
+  const loadLive = useDesk((s) => s.loadLive);
   const loadSynthetic = useDesk((s) => s.loadSynthetic);
-  const runBt = useDesk((s) => s.runBt);
   const analysis = useDesk((s) => s.analysis);
   const source = useDesk((s) => s.source);
 
-  async function loadLive() {
-    const current = useDesk.getState().cfg;
-    useDesk.setState({ loading: true, error: null });
-    try {
-      const bundle = await loadOhlcv({
-        data: {
-          symbol: current.symbol,
-          ltf: current.ltf,
-          htf: current.htf,
-          market: current.market,
-          ltfBars: barBudget(current.ltf),
-          htfBars: barBudget(current.htf),
-        },
-      });
-      ingest(bundle.ltf, bundle.htf, bundle.source, bundle.sourceNote);
-      useDesk.getState().runBt();
-    } catch (err) {
-      useDesk.setState({
-        loading: false,
-        error: err instanceof Error ? err.message : "Không tải được nến",
-      });
+  useEffect(() => {
+    // Client-only seed: SSR renders the empty shell, the store fills after
+    // mount (synthetic timestamps use Date.now() — never during SSR).
+    if (useDesk.getState().ltf.length === 0) {
       useDesk.getState().loadSynthetic();
-      useDesk.getState().runBt();
     }
-  }
+  }, []);
 
   return (
     <div className="min-h-dvh bg-bg text-fg">
@@ -79,10 +48,21 @@ export function DeskApp() {
         <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-4 md:px-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">
-              <span className="flex size-9 items-center justify-center rounded-md bg-surface-2">
-                <CandlestickChart className="size-4 text-accent" />
-              </span>
-              <div>
+              <div className="flex items-center gap-2">
+                <Link
+                  to="/chart"
+                  className="flex h-9 items-center rounded-md bg-surface-2 px-3 text-xs text-muted hover:text-fg"
+                >
+                  Chart
+                </Link>
+                <Link
+                  to="/screener"
+                  className="flex h-9 items-center rounded-md bg-surface-2 px-3 text-xs text-muted hover:text-fg"
+                >
+                  Screener
+                </Link>
+              </div>
+              <div className="hidden flex-col sm:flex">
                 <p className="font-display text-2xl leading-none tracking-tight md:text-3xl">
                   Vela <span className="italic text-muted">Desk</span>
                 </p>
@@ -98,7 +78,7 @@ export function DeskApp() {
           </div>
 
           <div className="flex flex-col gap-3 rounded-xl bg-surface p-3 md:p-4">
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {SYMBOLS.map((s) => (
                 <button
                   key={s}
@@ -112,6 +92,23 @@ export function DeskApp() {
                   {s}
                 </button>
               ))}
+              <select
+                className="h-11 rounded-full bg-surface-2 px-4 text-sm text-muted"
+                value={SYMBOLS.includes(cfg.symbol as never) ? "" : cfg.symbol}
+                onChange={(e) => {
+                  if (e.target.value) setCfg({ symbol: e.target.value });
+                }}
+                title="Tất cả symbol trong kho"
+              >
+                <option value="">
+                  {SYMBOLS.includes(cfg.symbol as never) ? "Khác…" : cfg.symbol + " ▾"}
+                </option>
+                {UNIVERSE_SYMBOLS.filter((sym) => !SYMBOLS.includes(sym as never)).map((sym) => (
+                  <option key={sym} value={sym}>
+                    {sym}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
               <Field label="LTF">
@@ -138,6 +135,19 @@ export function DeskApp() {
                   <option value="1h">1h</option>
                   <option value="4h">4h</option>
                   <option value="1d">1d</option>
+                </select>
+              </Field>
+              <Field label="Chiến lược">
+                <select
+                  className="h-11 w-full rounded-md bg-surface-2 px-3 text-sm text-fg"
+                  value={cfg.strategyId}
+                  onChange={(e) => setCfg({ strategyId: e.target.value as DeskConfig["strategyId"] })}
+                >
+                  {STRATEGY_SELECT_OPTIONS.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.label}
+                    </option>
+                  ))}
                 </select>
               </Field>
               <Field label="Thị trường">
@@ -188,7 +198,7 @@ export function DeskApp() {
                 {loading ? <LoaderCircle className="animate-spin" /> : null}
                 Tải nến
               </Button>
-              <Button variant="secondary" onClick={() => { loadSynthetic(); runBt(); }} disabled={loading}>
+              <Button variant="secondary" onClick={loadSynthetic} disabled={loading}>
                 Nến mô phỏng
               </Button>
               <label className="flex h-11 items-center gap-2 rounded-md bg-surface-2 px-3 text-sm text-muted">
@@ -231,7 +241,7 @@ export function DeskApp() {
       <main className="mx-auto max-w-6xl px-4 py-5 pb-16 md:px-6">
         {tab === "analyze" ? <AnalyzePanel /> : null}
         {tab === "strategy" ? <StrategyPanel /> : null}
-        {tab === "backtest" ? <BacktestPanel /> : null}
+        {tab === "backtest" ? <TesterPanel /> : null}
         {tab === "paper" ? <PaperPanel /> : null}
         {tab === "code" ? <CodePanel /> : null}
       </main>

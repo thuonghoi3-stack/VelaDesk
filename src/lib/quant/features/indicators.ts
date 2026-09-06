@@ -1,5 +1,5 @@
-import { smaAt, stdevAt } from "../math";
-import type { FeatureBar, Ohlcv, Regime } from "../types";
+import { smaAt, stdevAt } from "../math.ts";
+import type { FeatureBar, Ohlcv, Regime } from "../types.ts";
 
 function seedBar(bar: Ohlcv): FeatureBar {
   return {

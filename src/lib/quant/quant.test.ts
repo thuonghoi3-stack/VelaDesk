@@ -58,7 +58,11 @@ test("backtest runs next-bar without throwing", () => {
   const ltfRaw = generateSynthetic("BTC/USDT", "1h", 900);
   const htfRaw = generateSynthetic("BTC/USDT", "4h", 400);
   const { ltf } = buildDesk(ltfRaw, htfRaw, cfg);
+  const signals = ltf.filter((b) => b.signal !== 0).length;
+  // A silent zero-signal regression once slipped through here — keep both.
+  assert.ok(signals > 0, `expected entry signals on synthetic data, got ${signals}`);
   const res = runBacktest(ltf, cfg, "1h");
   assert.ok(res.metrics.endEquity > 0);
+  assert.ok(res.metrics.trades > 0, "expected closed trades on synthetic data");
   assert.ok(res.claimReason.length > 0);
 });
