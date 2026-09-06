@@ -239,7 +239,16 @@ export class SimEngine {
       signalExit,
       exitChannelBars: CHANNEL_EXIT[strategy],
     };
-    if (REVERSION_CLASS.has(strategy) && sigBar.bbMid != null) {
+    // Classic BB mean-reversion takes profit at the band mid. E0V1E is
+    // exempt: its dip is typically ~0.5R below the mid already, so a mid
+    // target would cap winners below 1R against a full-R stop (measured on
+    // PEPE 5m: mid-distance averages 0.50R). It keeps the R ladder, which is
+    // ATR-normalized through the stop distance.
+    if (
+      REVERSION_CLASS.has(strategy) &&
+      strategy !== "e0v1e" &&
+      sigBar.bbMid != null
+    ) {
       pos.tp1 = sigBar.bbMid;
       pos.tp2 = sigBar.bbMid;
     }
