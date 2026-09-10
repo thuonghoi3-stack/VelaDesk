@@ -1,4 +1,7 @@
+import { nativeUnsupported } from "./strategy/library.ts";
 import { create } from "zustand";
+import type { TradeRunSnapshot } from "./trade-focus.ts";
+import { createReplaySession } from "./replay-session.ts";
 import { runBacktest, SimEngine } from "./backtest/engine.ts";
 import { barBudget as budgetFor, defaultConfig, htfBudget } from "./config.ts";
 import { generateSynthetic } from "./data/synthetic.ts";
@@ -18,13 +21,15 @@ import type {
   Timeframe,
 } from "./types.ts";
 
-export type DeskTab = "analyze" | "strategy" | "backtest" | "paper" | "code";
+export type DeskTab = "playbook" | "analyze" | "strategy" | "backtest" | "paper" | "code";
 
 /** Config fields that change WHAT data must be fetched (vs how it is traded). */
 const DATA_KEYS: ReadonlySet<string> = new Set(["symbol", "ltf", "htf", "market"]);
 /** Inputs that change the SIGNAL columns — bars must be re-signaled (cheap). */
 const SIGNAL_KEYS: ReadonlySet<string> = new Set([
   "strategyId",
+  "executionMode",
+  "nativeTickSize",
   "volSpikeMin",
   "mrRsiLongMax",
   "mrRsiShortMin",
@@ -48,14 +53,30 @@ const SIGNAL_KEYS: ReadonlySet<string> = new Set([
   "warmup",
 ]);
 
+type HistoricalReplay = Readonly<{
+  bars: FeatureBar[];
+  config: DeskConfig;
+  entryTime: number;
+  source: string;
+  sourceNote: string;
+  startIndex: number;
+}>;
+
 type PaperState = {
+  historical: HistoricalReplay | null;
   engine: SimEngine | null;
   cursor: number;
   events: PaperEvent[];
   playing: boolean;
 };
 
-const emptyPaper = (): PaperState => ({ engine: null, cursor: 0, events: [], playing: false });
+const emptyPaper = (): PaperState => ({
+  engine: null,
+  cursor: 0,
+  events: [],
+  playing: false,
+  historical: null,
+});
 
 type DeskState = {
   cfg: DeskConfig;
@@ -71,6 +92,7 @@ type DeskState = {
   analysis: AnalysisSnapshot | null;
   explain: StrategyExplain | null;
   backtest: BacktestResult | null;
+  backtestRun: TradeRunSnapshot | null;
   paper: PaperState;
   /** Monotonic request id — a slower older fetch must never overwrite a newer one. */
   loadSeq: number;
@@ -88,6 +110,14 @@ type DeskState = {
   resignal: () => void;
   recomputeDerived: () => void;
   runBt: () => void;
+  startTradeReplay: (
+    bars: FeatureBar[],
+    config: DeskConfig,
+    entryTime: number,
+    source: string,
+    sourceNote: string,
+  ) => void;
+  paperCurrent: () => void;
   paperReset: () => void;
   paperStep: () => void;
   setPlaying: (v: boolean) => void;
@@ -107,12 +137,13 @@ function applyBundle(
     analysis: snapshotOf(ltf, cfg, source, note),
     explain: explainLastBar(ltf, cfg),
     backtest: null as BacktestResult | null,
+    backtestRun: null as TradeRunSnapshot | null,
   };
 }
 
 export const useDesk = create<DeskState>()((set, get) => ({
   cfg: defaultConfig(),
-  tab: "analyze",
+  tab: "playbook",
   loading: false,
   error: null,
   btNote: null,
@@ -123,16 +154,17 @@ export const useDesk = create<DeskState>()((set, get) => ({
   analysis: null,
   explain: null,
   backtest: null,
+  backtestRun: null,
   paper: emptyPaper(),
   loadSeq: 0,
   setCfg: (partial) => {
-    set((s) => ({ cfg: { ...s.cfg, ...partial } }));
+    set((s) => ({ cfg: { ...s.cfg, ...partial }, backtest: null, backtestRun: null, btNote: null }));
     const keys = Object.keys(partial);
     const touchesData = keys.some((k) => DATA_KEYS.has(k));
     if (touchesData) {
       // The bars on screen no longer match the request — drop derived state
       // and refetch. A failed refetch falls back to synthetic inside loadLive.
-      set({ paper: emptyPaper() });
+      set({ paper: get().paper.historical ? get().paper : emptyPaper() });
       void get().loadLive();
       return;
     }
@@ -143,7 +175,7 @@ export const useDesk = create<DeskState>()((set, get) => ({
   setTab: (tab) => set({ tab }),
   loadLive: async () => {
     const seq = get().loadSeq + 1;
-    set({ loadSeq: seq, loading: true, error: null });
+    set({ loadSeq: seq, loading: true, error: null, backtest: null, backtestRun: null, btNote: null });
     const current = get().cfg;
     try {
       const pref = getSourcePref();
@@ -155,7 +187,11 @@ export const useDesk = create<DeskState>()((set, get) => ({
           market: current.market,
           ltfBars: budgetFor(current.ltf),
           htfBars: htfBudget(current.htf),
-          ...(pref === "auto" ? (getLastOkSource() ? { preferred: getLastOkSource() } : {}) : { preferred: pref }),
+          ...(pref === "auto"
+            ? getLastOkSource()
+              ? { preferred: getLastOkSource() }
+              : {}
+            : { preferred: pref }),
         },
       });
       if (get().loadSeq !== seq) return;
@@ -190,7 +226,7 @@ export const useDesk = create<DeskState>()((set, get) => ({
       loading: false,
       error: null,
       btNote: null,
-      paper: emptyPaper(),
+      paper: get().paper.historical ? get().paper : emptyPaper(),
     });
   },
   loadSynthetic: () => {
@@ -213,9 +249,11 @@ export const useDesk = create<DeskState>()((set, get) => ({
     const re = applySignals(ltf, cfg);
     set({
       ltf: re,
+      backtest: null,
+      backtestRun: null,
       analysis: snapshotOf(re, cfg, get().source ?? "synthetic", get().sourceNote),
       explain: explainLastBar(re, cfg),
-      paper: emptyPaper(),
+      paper: get().paper.historical ? get().paper : emptyPaper(),
     });
   },
   recomputeDerived: () => {
@@ -224,22 +262,76 @@ export const useDesk = create<DeskState>()((set, get) => ({
     get().runBt();
   },
   runBt: () => {
-    const { ltf, cfg } = get();
+    const { ltf, cfg, source, sourceNote, loading } = get();
+    // During a fetch the retained bars belong to the previous data request.
+    if (loading) {
+      set({ backtest: null, backtestRun: null, btNote: null });
+      return;
+    }
     if (ltf.length < cfg.warmup + 50) {
       set({
         backtest: null,
+        backtestRun: null,
         btNote: `Cần tối thiểu ${cfg.warmup + 50} nến LTF để backtest (đang có ${ltf.length}).`,
       });
       return;
     }
-    set({ backtest: runBacktest(ltf, cfg, cfg.ltf), btNote: null });
+    const unsupported=nativeUnsupported(cfg);if(unsupported){set({backtest:null,backtestRun:null,btNote:unsupported});return;}
+    const bars = structuredClone(ltf);
+    const runCfg = structuredClone(cfg);
+    const result = runBacktest(bars, runCfg, runCfg.ltf);
+    const backtestRun: TradeRunSnapshot = {
+      result, bars, cfg: runCfg, source, sourceNote, datasetKey: crypto.randomUUID(),
+    };
+    set({ backtest: result, backtestRun, btNote: null });
+  },
+  startTradeReplay: (bars, config, entryTime, source, sourceNote) => {
+    // Construct first: an invalid target must not disturb the active session.
+    const engine = createReplaySession(bars, config, entryTime);
+    for (const bar of engine.bars) {
+      if (bar.pattern) Object.freeze(bar.pattern);
+      Object.freeze(bar);
+    }
+    Object.freeze(engine.bars);
+    Object.freeze(engine.cfg.symbols);
+    Object.freeze(engine.cfg);
+    const historical = Object.freeze({
+      bars: engine.bars,
+      config: engine.cfg,
+      entryTime,
+      source,
+      sourceNote,
+      startIndex: engine.i,
+    });
+    set({
+      tab: "paper",
+      paper: {
+        engine,
+        historical,
+        cursor: engine.i,
+        events: engine.events.slice(-40),
+        playing: false,
+      },
+    });
   },
   paperReset: () => {
+    const h = get().paper.historical;
+    if (h) {
+      get().startTradeReplay(h.bars, h.config, h.entryTime, h.source, h.sourceNote);
+      return;
+    }
+    get().paperCurrent();
+  },
+  paperCurrent: () => {
     const { ltf, cfg } = get();
-    if (ltf.length < cfg.warmup + 10) return;
-    const start = Math.max(cfg.warmup, ltf.length - 180);
+    if (!Number.isInteger(cfg.warmup) || cfg.warmup < 0 || ltf.length < cfg.warmup + 10) {
+      set({ paper: emptyPaper() });
+      return;
+    }
+    if(nativeUnsupported(cfg)){set({paper:emptyPaper(),btNote:nativeUnsupported(cfg)});return;}
+    const start = cfg.warmup;
     const engine = new SimEngine(ltf, cfg, cfg.ltf, start);
-    set({ paper: { engine, cursor: start, events: [], playing: false } });
+    set({ paper: { engine, historical: null, cursor: start, events: [], playing: false } });
   },
   paperStep: () => {
     const paper = get().paper;
@@ -251,6 +343,7 @@ export const useDesk = create<DeskState>()((set, get) => ({
     const events = snap.lastEvent ? [...paper.events, snap.lastEvent].slice(-40) : paper.events;
     set({
       paper: {
+        ...paper,
         engine: paper.engine,
         cursor: snap.i,
         events,

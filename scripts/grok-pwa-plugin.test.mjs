@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import test, { after } from "node:test";
 import {
   appNameFromHost,
-  createHeadInjector,
+  createHeadInjector as createHeadInjectorFromContext,
   grokXCreatorHeadTags,
-  injectGrokPwaHead,
+  injectGrokPwaHead as injectGrokPwaHeadFromContext,
   isDocumentPath,
   isInstallQuery,
   publicAppHost,
@@ -18,6 +18,15 @@ import {
   stripInstallParams,
 } from "./grok-pwa-shared.mjs";
 import { renderInstallPage } from "./grok-pwa-plugin.mjs";
+
+// Every injector receives an explicit isolated cwd; per-case disk fixtures override it.
+// Do not chdir: other tests and plugin source tripwires still use the checkout.
+const EMPTY_CWD = mkdtempSync(join(tmpdir(), "grok-pwa-isolated-"));
+after(() => rmSync(EMPTY_CWD, { recursive: true, force: true }));
+const injectGrokPwaHead = (html, context = {}) =>
+  injectGrokPwaHeadFromContext(html, { cwd: EMPTY_CWD, ...context });
+const createHeadInjector = (context = {}) =>
+  createHeadInjectorFromContext({ cwd: EMPTY_CWD, ...context });
 
 const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -352,6 +361,21 @@ test("document title entities are not double-escaped on og:title", () => {
   );
   assert.match(out, /property="og:title" content="Cats &amp; Dogs"/);
   assert.doesNotMatch(out, /Cats &amp;amp; Dogs/);
+});
+
+test("explicit disk branding wins without borrowing the checkout identity or card", (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), "grok-pwa-branded-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  mkdirSync(join(cwd, "src/lib/og"), { recursive: true });
+  mkdirSync(join(cwd, "public"));
+  writeFileSync(join(cwd, "src/lib/og/site.json"), JSON.stringify({ title: "Pixel Nova" }));
+  writeFileSync(join(cwd, "public/og.png"), "fixture-card");
+  const out = injectGrokPwaHead("<html><head><title>Hello World</title></head></html>", {
+    cwd, host: "wild-race.grok.me", appName: "Wild Race",
+  });
+  assert.match(out, /property="og:title" content="Pixel Nova"/);
+  assert.match(out, /property="og:image" content="https:\/\/wild-race\.grok\.me\/og\.png"/);
+  assert.doesNotMatch(out, /og\.grok\.me/);
 });
 
 test("site.json title wins over the host slug", () => {

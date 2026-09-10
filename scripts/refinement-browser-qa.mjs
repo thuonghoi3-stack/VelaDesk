@@ -1,0 +1,3 @@
+import {chromium} from 'playwright';import assert from 'node:assert/strict';
+const b=await chromium.launch();const p=await b.newPage({viewport:{width:1440,height:1000}});const errors=[];p.on('pageerror',e=>errors.push(e.message));
+try{await p.goto(process.env.VELA_QA_URL||'http://127.0.0.1:8080/',{waitUntil:'networkidle'});await p.getByRole('button',{name:'Tester',exact:true}).click();await p.getByRole('button',{name:'Danh sách lệnh',exact:true}).click();await p.getByTestId('trade-row').first().getByRole('button').click();await p.getByRole('button',{name:'Replay từ điểm vào',exact:true}).waitFor({timeout:5000});assert.deepEqual(errors,[]);console.log('Trade replay action exists');}finally{await b.close();}

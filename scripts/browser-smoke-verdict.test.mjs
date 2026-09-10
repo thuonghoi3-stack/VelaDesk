@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
+import { runInNewContext } from "node:vm";
+import * as verdictHelpers from "./browser-smoke-verdict.mjs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
@@ -371,16 +373,123 @@ test("exitCodeFor: no viewport data is a failure", () => {
   assert.equal(exitCodeFor(undefined), 1);
 });
 
+// Execute the unchanged CLI setup and baseline reader with real guard/verdict logic.
+// Virtual POSIX filesystem seams cover sandbox presence/absence on every OS;
+// baseline links model realpath results, not privileged OS file-symlink coverage.
+function smokeSetup({ sandbox = false, argv = [], files = {}, links = {}, derived } = {}) {
+  const events = { reads: [], stats: [], errors: [], mkdirs: [] };
+  const proc = { argv: ["node", "/checkout/scripts/browser-smoke.mjs", ...argv], env: {},
+    exit(code) {
+      const exit = Object.assign(new Error("CLI exit"), { exitCode: code });
+      // process.exit cannot be swallowed by the baseline filesystem catch.
+      Object.defineProperty(exit, "code", { get() { throw exit; } });
+      throw exit;
+    } };
+  const consoleStub = { error(message) { events.errors.push(message); } };
+  const stripImports = (source) => source.replace(/^import[\s\S]*?;\s*$/gm, "");
+  const guardSource = stripImports(readFileSync(join(TEMPLATE_ROOT, "scripts/browser-guard.mjs"), "utf8"))
+    .replace(/export function /g, "function ");
+  const guards = runInNewContext(`${guardSource}\n({ checkedUrl, checkedOutputPath })`, {
+    resolve: posix.resolve, sep: "/", URL, process: proc, console: consoleStub,
+  });
+  const source = stripImports(readFileSync(join(TEMPLATE_ROOT, "scripts/browser-smoke.mjs"), "utf8"))
+    .replace(/^#!.*\n/, "").replaceAll("import.meta.url", '"file:///checkout/scripts/browser-smoke.mjs"');
+  const boundary = source.indexOf("let browser = null;");
+  assert.ok(boundary > 0, "CLI setup seam must exist; never silently run an empty harness");
+  const bindings = {
+    ...verdictHelpers, ...guards, ...(derived ? { derivedPaths: () => derived } : {}),
+    process: proc, console: consoleStub,
+    dirname: posix.dirname, join: posix.join, resolve: posix.resolve,
+    fileURLToPath: (url) => new URL(url).pathname,
+    existsSync: (p) => p === "/workspace" ? sandbox : Object.hasOwn(files, p),
+    mkdirSync(p) { events.mkdirs.push(p); },
+    realpathSync(p) {
+      const target = links[p] ?? posix.normalize(p);
+      if (!Object.hasOwn(files, target)) throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      return target;
+    },
+    statSync(p) { events.stats.push(p); return { size: Buffer.byteLength(files[p]) }; },
+    readFileSync(p) { events.reads.push(p); return files[p]; },
+  };
+  try {
+    const setup = runInNewContext(`${source.slice(0, boundary)}\n({ url, outPng, mobilePng, outJson, compareAgainstBaseline })`, bindings);
+    return { ...events, code: 0, ...setup };
+  } catch (error) {
+    if (error.exitCode === undefined) throw error;
+    return { ...events, code: error.exitCode };
+  }
+}
+
+for (const sandbox of [false, true]) {
+  const root = sandbox ? "/workspace" : "/checkout";
+  test(`smoke setup maps and guards all outputs (${root})`, () => {
+    for (const out of [undefined, `${root}/shots/run.png`, "/workspace/shots/run.png"]) {
+      const result = smokeSetup({ sandbox, argv: out ? ["http://127.0.0.1:8080/", out] : [] });
+      const base = out ? `${root}/shots/run` : `${root}/screenshots/app-builder-preview`;
+      assert.equal(result.code, 0);
+      assert.equal(result.outPng, base + ".png");
+      assert.equal(result.mobilePng, base + "-mobile.png");
+      assert.equal(result.outJson, base + ".json");
+    }
+  });
+  test(`smoke setup rejects traversal, sibling-prefix, root and external URL (${root})`, () => {
+    for (const argv of [["file:///secret"], ["https://example.com/"],
+      ["http://127.0.0.1:8080/", "/workspace/../escape.png"],
+      ["http://127.0.0.1:8080/", `${root}-other/escape.png`],
+      ["http://127.0.0.1:8080/", root]]) {
+      const result = smokeSetup({ sandbox, argv });
+      assert.equal(result.code, 1, JSON.stringify(argv));
+      assert.deepEqual(result.mkdirs, []);
+      assert.ok(result.errors.length);
+    }
+  });
+  test(`smoke setup independently guards derived mobile and JSON paths (${root})`, () => {
+    for (const field of ["mobilePng", "verdictJson"]) {
+      const derived = { mobilePng: `${root}/mobile.png`, verdictJson: `${root}/verdict.json`, [field]: "/outside/escape" };
+      const result = smokeSetup({ sandbox, derived });
+      assert.equal(result.code, 1);
+      assert.deepEqual(result.mkdirs, []);
+      assert.match(result.errors.join(""), /path must be under/);
+    }
+  });
+  test(`smoke setup checks realpath containment and refuses baseline overwrite (${root})`, () => {
+    const own = `${root}/screenshots/app-builder-preview.json`;
+    for (const [input, target] of [["/workspace/link.json", own], ["/workspace/screenshots/app-builder-preview.json", own],
+      ["/workspace/link.json", "/outside/baseline.json"], ["/workspace/../outside/baseline.json", "/outside/baseline.json"]]) {
+      const mapped = input === "/workspace/../outside/baseline.json" ? "/outside/baseline.json" : input.replace("/workspace", root);
+      const result = smokeSetup({ sandbox, argv: ["--baseline", input], files: { [target]: "{}" }, links: { [mapped]: target } });
+      assert.equal(result.code, 1);
+      assert.deepEqual(result.reads, []);
+      assert.deepEqual(result.mkdirs, []);
+      assert.match(result.errors.join(""), target === own ? /baseline is not overwritten/ : /baseline path must be under/);
+    }
+  });
+  test(`smoke baseline reader validates missing, malformed, oversized and valid data (${root})`, () => {
+    for (const [raw, reason] of [[undefined, "ENOENT"], ["{", "invalid JSON"], ["{}", "not a verdict object"], ["x".repeat(1024 * 1024 + 1), "too large"]]) {
+      const result = smokeSetup({ sandbox, argv: ["--baseline", "/workspace/prior.json"], files: raw === undefined ? {} : { [`${root}/prior.json`]: raw } });
+      assert.equal(result.code, 0);
+      const comparison = result.compareAgainstBaseline(verdict());
+      assert.equal(comparison.divergesFromBaseline, true);
+      assert.match(comparison.reasons.join(""), new RegExp(reason));
+      if (reason === "too large" || reason === "ENOENT") assert.deepEqual(result.reads, []);
+    }
+    const result = smokeSetup({ sandbox, argv: ["--baseline", "/workspace/prior.json"], files: { [`${root}/prior.json`]: JSON.stringify(verdict()) } });
+    assert.equal(result.compareAgainstBaseline(verdict()).divergesFromBaseline, false);
+    assert.deepEqual(result.reads, [`${root}/prior.json`]);
+    assert.deepEqual(result.stats, [`${root}/prior.json`]);
+  });
+}
+
 test("browser-smoke wires the guard and verdict helpers", () => {
   const src = readFileSync(join(TEMPLATE_ROOT, "scripts/browser-smoke.mjs"), "utf8");
   assert.match(src, /from "\.\/browser-guard\.mjs"/);
   assert.match(src, /from "\.\/browser-smoke-verdict\.mjs"/);
   assert.match(src, /const args = parseSmokeArgs\(process\.argv\.slice\(2\), process\.env\)/);
   assert.match(src, /const url = checkedUrl\(args\.url\)/);
-  assert.match(src, /const outPng = checkedOutputPath\(args\.outPng, \["\/workspace"\]\)/);
-  assert.match(src, /const mobilePng = checkedOutputPath\(derived\.mobilePng, \["\/workspace"\]\)/);
-  assert.match(src, /const outJson = checkedOutputPath\(derived\.verdictJson, \["\/workspace"\]/);
-  assert.match(src, /checkedOutputPath\(realpathSync\(args\.baseline\), \["\/workspace"\]/);
+
+
+
+
   assert.match(src, /baselinePath === outJson/);
   assert.match(src, /normalizedBodyTextHash\(/);
   assert.match(src, /bodyTextPrefix\(/);

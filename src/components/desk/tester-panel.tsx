@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EquityChart } from "@/components/desk/equity-chart";
+import { TradeInspector } from "@/components/desk/trade-inspector";
+import type { TradeRunSnapshot } from "@/lib/quant/trade-focus";
 import { useDesk } from "@/lib/quant/store";
 import type { BacktestResult, DeskConfig, EquityPoint, Metrics, Trade } from "@/lib/quant/types";
 import { runBacktest } from "@/lib/quant/backtest/engine";
@@ -165,6 +167,12 @@ function SideTable({ rows }: { rows: readonly (readonly [string, StrategyRow])[]
 type FieldDef = { key: keyof DeskConfig; label: string; step?: number };
 
 const INPUT_FIELDS: { group: string; fields: FieldDef[] }[] = [
+  {group:"Source-native account assumptions (only native mode)",fields:[
+    {key:"nativeFixedQty",label:"Fixed units when source omits size",step:0.01},
+    {key:"nativeTickSize",label:"Instrument tick size (verify for symbol)",step:0.001},
+    {key:"nativeFee",label:"Native fee ratio",step:0.0001},
+    {key:"nativeSlippageBps",label:"Native slippage bps",step:1},
+  ]},
   {
     group: "Tín hiệu",
     fields: [
@@ -252,6 +260,7 @@ function EditDialog({
     const partial: Partial<DeskConfig> = {};
     for (const sec of sections) {
       for (const f of sec.fields) {
+        if(cfg.executionMode === "source-native" && !String(f.key).startsWith("native") && f.key !== "equity" && f.key !== "warmup")continue;
         const v = Number(draft[f.key as string]);
         if (Number.isFinite(v) && v !== cfg[f.key]) {
           (partial as Record<string, number>)[f.key as string] = v;
@@ -283,6 +292,7 @@ function EditDialog({
                   <span className="text-[11px] text-muted">{f.label}</span>
                   <input
                     type="number"
+                    disabled={cfg.executionMode === "source-native" && !String(f.key).startsWith("native") && f.key !== "equity" && f.key !== "warmup"}
                     step={f.step ?? "any"}
                     value={draft[f.key as string] ?? ""}
                     onChange={(e) => setDraft((d) => ({ ...d, [f.key as string]: e.target.value }))}
@@ -385,6 +395,10 @@ const TABS: { id: TesterTab; label: string }[] = [
 
 export function TesterPanel() {
   const storeBt = useDesk((s) => s.backtest);
+  const storeRun = useDesk((s) => s.backtestRun);
+  const source = useDesk((s) => s.source);
+  const sourceNote = useDesk((s) => s.sourceNote);
+  const loading = useDesk((s) => s.loading);
   const runStoreBt = useDesk((s) => s.runBt);
   const ltf = useDesk((s) => s.ltf);
   const cfg = useDesk((s) => s.cfg);
@@ -394,21 +408,29 @@ export function TesterPanel() {
   const [dialog, setDialog] = useState<"inputs" | "properties" | null>(null);
   // TV-style date range: when set, the tester reruns on the slice locally.
   const [range, setRange] = useState<{ from: string; to: string }>({ from: "", to: "" });
-  const [localBt, setLocalBt] = useState<BacktestResult | null>(null);
+  const [localBt, setLocalBt] = useState<(TradeRunSnapshot & { inputBars: typeof ltf; inputCfg: DeskConfig; range: typeof range }) | null>(null);
+  // A replay handoff owns its research run until the user explicitly releases it.
+  const [captured, setCaptured] = useState<{ run: TradeRunSnapshot; range: typeof range } | null>(null);
   const [rangeError, setRangeError] = useState<string | null>(null);
   const [rerunning, setRerunning] = useState(false);
 
   const rangeActive = range.from !== "" || range.to !== "";
 
   useEffect(() => {
-    if (!rangeActive || ltf.length === 0) {
+    setRerunning(false);
+    if (captured) return;
+    if (!rangeActive || loading || ltf.length === 0) {
       setLocalBt(null);
       setRangeError(null);
       return;
     }
     const from = range.from ? Date.parse(`${range.from}T00:00:00Z`) : 0;
     const to = range.to ? Date.parse(`${range.to}T23:59:59Z`) : Number.MAX_SAFE_INTEGER;
-    if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) {
+      setLocalBt(null);
+      setRangeError("Khoảng ngày không hợp lệ: ngày bắt đầu phải trước ngày kết thúc.");
+      return;
+    }
     const sliced = sliceBarsByRange(ltf, from, to);
     if (sliced.length < cfg.warmup + 50) {
       setLocalBt(null);
@@ -417,27 +439,49 @@ export function TesterPanel() {
     }
     setRangeError(null);
     setRerunning(true);
+    const bars = structuredClone(sliced);
+    const runCfg = structuredClone(cfg);
     const id = window.setTimeout(() => {
       try {
-        setLocalBt(runBacktest(sliced, cfg, cfg.ltf));
+        const result = runBacktest(bars, runCfg, runCfg.ltf);
+        setLocalBt({ result, bars, cfg: runCfg, source, sourceNote, datasetKey: crypto.randomUUID(), inputBars: ltf, inputCfg: cfg, range });
+      } catch (error) {
+        setLocalBt(null);
+        setRangeError(error instanceof Error ? error.message : "Không thể chạy backtest trong khoảng ngày này.");
       } finally {
         setRerunning(false);
       }
     }, 30);
     return () => window.clearTimeout(id);
-  }, [range, rangeActive, ltf, cfg]);
+  }, [range, rangeActive, ltf, cfg, source, sourceNote, loading, captured]);
 
-  const bt = localBt ?? storeBt;
+  // Never fall back to an unrelated full-sample result while a range is invalid or pending.
+  const localRun = localBt?.inputBars === ltf && localBt.inputCfg === cfg && localBt.range === range && !loading ? localBt : null;
+  const fullRun = !loading && storeRun?.result === storeBt ? storeRun : null;
+  const run = captured?.run ?? (rangeActive ? localRun : fullRun);
+  const shownCfg = run?.cfg ?? cfg;
+  const bt = run?.result ?? null;
   const btTrades = bt?.trades ?? [];
 
   return (
     <div className="flex flex-col gap-4">
+      {captured ? (
+        <section data-testid="tester-historical-context" className="rounded-xl border border-border bg-surface p-4 text-sm">
+          <p className="font-medium text-warn">Lần chạy lịch sử đã lưu</p>
+          <p className="mt-1 break-words text-muted">
+            {captured.run.cfg.symbol} · {captured.run.cfg.ltf} · {captured.run.cfg.market} · {captured.run.cfg.strategyId} · {captured.run.source}
+            {" · "}{captured.range.from || "Toàn mẫu"} → {captured.range.to || "Cuối mẫu"}
+            {" · "}{captured.run.sourceNote}
+          </p>
+          <p className="mt-2 text-xs text-muted">Bộ nến, kết quả và bộ lọc được giữ khi quay lại từ Replay. Cấu hình toàn cục hiện tại: {cfg.symbol} · {cfg.ltf}. Chuyển sang kết quả hiện tại để chỉnh Inputs/Properties hoặc khoảng ngày.</p>
+          <Button className="mt-3" variant="secondary" onClick={() => setCaptured(null)}>Xem kết quả hiện tại</Button>
+        </section>
+      ) : null}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-surface p-4">
         <div>
           <h2 className="font-display text-2xl">Strategy Tester</h2>
           <p className="mt-1 max-w-2xl text-sm text-muted">
-            {cfg.symbol} · {cfg.ltf} · tín hiệu đóng nến t khớp open t+1 · phí, slippage, funding,
-            daily-loss halt. Mô hình Strategy Tester: sửa Inputs/Properties là chạy lại.
+            {shownCfg.symbol} · {shownCfg.ltf} · {shownCfg.executionMode === "source-native" ? "Source-native: next-tick markets / persistent stops; separate account assumptions below." : "tín hiệu đóng nến t khớp open t+1 · phí, slippage, funding, daily-loss halt."} {captured ? "Đang xem lần chạy lịch sử đã lưu, không phải cấu hình toàn cục hiện tại." : "Mô hình Strategy Tester: sửa Inputs/Properties là chạy lại."}
           </p>
           {bt && bt.equity.length > 1 ? (
             <p className="mt-1 text-xs text-subtle">
@@ -447,8 +491,9 @@ export function TesterPanel() {
             </p>
           ) : null}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1.5 rounded-md bg-surface-2 px-2 py-1.5">
+        <fieldset disabled={!!captured} className="flex min-w-0 flex-wrap items-center gap-2 disabled:opacity-60">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 rounded-md bg-surface-2 px-2 py-1.5">
+            <label className="flex min-w-0 items-center gap-1.5">
             <span className="text-[10px] text-subtle uppercase">Từ</span>
             <input
               type="date"
@@ -456,6 +501,8 @@ export function TesterPanel() {
               onChange={(e) => setRange((r) => ({ ...r, from: e.target.value }))}
               className="bg-transparent font-mono text-xs text-fg [color-scheme:dark]"
             />
+            </label>
+            <label className="flex min-w-0 items-center gap-1.5">
             <span className="text-[10px] text-subtle uppercase">Đến</span>
             <input
               type="date"
@@ -463,6 +510,7 @@ export function TesterPanel() {
               onChange={(e) => setRange((r) => ({ ...r, to: e.target.value }))}
               className="bg-transparent font-mono text-xs text-fg [color-scheme:dark]"
             />
+            </label>
             {rangeActive ? (
               <button
                 type="button"
@@ -476,7 +524,7 @@ export function TesterPanel() {
           </div>
           <select
             className="h-9 rounded-md bg-surface-2 px-2 text-xs text-fg"
-            value={cfg.strategyId}
+            value={shownCfg.strategyId}
             onChange={(e) => setCfg({ strategyId: e.target.value as DeskConfig["strategyId"] })}
           >
             {STRATEGY_SELECT_OPTIONS.map((o) => (
@@ -484,6 +532,12 @@ export function TesterPanel() {
                 {o.label}
               </option>
             ))}
+          </select>
+          <select aria-label="Execution mode" className="h-9 rounded-md bg-surface-2 px-2 text-xs text-fg"
+            value={shownCfg.executionMode ?? "custom-risk"}
+            onChange={e=>setCfg({executionMode:e.target.value as DeskConfig["executionMode"]})}>
+            <option value="custom-risk">Custom-risk adaptation</option>
+            <option value="source-native">Source-native · pinned defaults</option>
           </select>
           <Button variant="secondary" onClick={() => setDialog("inputs")}>
             <SlidersHorizontal />
@@ -501,16 +555,23 @@ export function TesterPanel() {
                 runStoreBt();
               }
             }}
-            disabled={rerunning}
+            disabled={rerunning || loading}
           >
             {rerunning ? <LoaderCircle className="animate-spin" /> : <RotateCcw />}
             Chạy lại
           </Button>
-        </div>
+        </fieldset>
       </div>
 
-      {btNote && !rangeActive ? <div className="rounded-xl bg-surface p-4 text-sm text-warn">{btNote}</div> : null}
-      {rangeError ? <div className="rounded-xl bg-surface p-4 text-sm text-warn">{rangeError}</div> : null}
+      <div className="rounded-xl bg-surface p-4 text-xs text-muted" data-testid="execution-scope">
+        {shownCfg.executionMode === "source-native" ? <>
+          <strong>Source-native · local source translation. Not TradingView runtime parity.</strong>
+          <p>Pinned formula defaults; both directions; no ADX gate, ATR protection, TP ladder, time stop or funding. Market orders fill next open; stop orders persist/cancel/OCA. OHLC path: open → nearest extreme → other extreme → close (ties low first). Terminal exit is VelaDesk end_of_data, not a source exit. R metrics are unavailable (reported 0), not ATR risk.</p>
+          <p>Account assumptions: equity {shownCfg.equity}; {shownCfg.strategyId === "supertrend" ? "source-declared 15% equity" : `${shownCfg.nativeFixedQty ?? 1} fixed units (source omits quantity)`}; tick {shownCfg.nativeTickSize}; fee {shownCfg.nativeFee}; slippage {shownCfg.nativeSlippageBps} bps. Tick is user-supplied, not venue-verified. Execution starts at configured warmup {shownCfg.warmup}; no prior pending orders are inherited. Portfolio shares cash in symbol order, without custom-risk caps.</p>
+        </> : <>Custom-risk adaptation: VelaDesk entry gates, sizing and exit rules; not a source-native backtest. E0V1E here retains ATR-normalized entries/R ladder, not pinned Freqtrade behavior.</>}
+      </div>
+      {btNote && !rangeActive && !captured ? <div className="rounded-xl bg-surface p-4 text-sm text-warn">{btNote}</div> : null}
+      {rangeError && !captured ? <div className="rounded-xl bg-surface p-4 text-sm text-warn">{rangeError}</div> : null}
 
       <nav className="flex gap-1 overflow-x-auto">
         {TABS.map((t) => (
@@ -530,17 +591,22 @@ export function TesterPanel() {
       </nav>
 
       {!bt ? (
-        <div className="rounded-xl bg-surface p-6 text-sm text-muted">Bấm “Chạy lại” để mô phỏng trên nến đã tải.</div>
+        <div className="rounded-xl bg-surface p-6 text-sm text-muted" role="status">
+          {loading ? "Đang tải bộ nến mới; không ghép kết quả cũ với cấu hình mới."
+            : rerunning ? "Đang chạy backtest cho khoảng ngày đã chọn…"
+            : rangeActive ? "Chưa có kết quả cho khoảng ngày này. Điều chỉnh khoảng ngày hoặc xem thông báo phía trên."
+            : "Bấm “Chạy lại” để mô phỏng trên nến đã tải."}
+        </div>
       ) : tab === "overview" ? (
         <OverviewTab bt={bt} />
       ) : tab === "trades" ? (
-        <TradesTab trades={btTrades} startEquity={cfg.equity} />
+        <TradesTab key={run?.datasetKey} trades={btTrades} startEquity={bt.metrics.startEquity} run={run} onReplay={() => { if (run) setCaptured({ run, range: { ...range } }); }} />
       ) : tab === "performance" ? (
         <PerformanceTab trades={btTrades} />
       ) : tab === "optimize" ? (
         <OptimizeTab />
       ) : tab === "montecarlo" ? (
-        <MonteCarloTab trades={btTrades} startEquity={cfg.equity} />
+        <MonteCarloTab trades={btTrades} startEquity={bt.metrics.startEquity} />
       ) : (
         <PortfolioTab />
       )}
@@ -665,15 +731,7 @@ function OverviewTab({ bt }: { bt: BacktestResult }) {
 
 /* --------------------------------- trades ---------------------------------- */
 
-function TradesTab({ trades, startEquity }: { trades: Trade[]; startEquity: number }) {
-  const rows = useMemo(() => {
-    let cum = 0;
-    return trades.map((t, i) => {
-      cum += t.pnl;
-      return { t, i: i + 1, cum };
-    });
-  }, [trades]);
-
+function TradesTab({ trades, startEquity, run, onReplay }: { trades: Trade[]; startEquity: number; run: TradeRunSnapshot | null; onReplay: () => void }) {
   function exportCsv() {
     const header =
       "id,side,strategy,entry_time,entry,exit_time,exit,qty,pnl,pnl_r,mfe_r,mae_r,fees,funding,reason,bars_held";
@@ -707,67 +765,16 @@ function TradesTab({ trades, startEquity }: { trades: Trade[]; startEquity: numb
     toast.success(`Đã xuất ${trades.length} lệnh ra vela-trades.csv`);
   }
 
-  if (rows.length === 0) {
-    return <div className="rounded-xl bg-surface p-6 text-sm text-muted">Chưa có lệnh nào trong mẫu này.</div>;
-  }
   return (
-    <div className="rounded-xl bg-surface p-4">
-      <div className="mb-3 flex justify-end">
-        <Button variant="secondary" onClick={exportCsv}>
+    <div className="min-w-0 rounded-xl bg-surface p-4">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-muted">Vốn ban đầu {formatUsd(startEquity)} · CSV luôn xuất toàn bộ {trades.length} nhánh, không theo bộ lọc.</p>
+        <Button variant="secondary" onClick={exportCsv} disabled={trades.length === 0}>
           <Download />
           Xuất CSV
         </Button>
       </div>
-      <div className="max-h-[60dvh] overflow-auto">
-        <table className="w-full text-left text-[11px]">
-          <thead className="sticky top-0 bg-surface text-muted">
-            <tr>
-              <th className="pb-2">#</th>
-              <th className="pb-2">Side</th>
-              <th className="pb-2">Strategy</th>
-              <th className="pb-2">Vào</th>
-              <th className="pb-2 text-right">Giá vào</th>
-              <th className="pb-2">Ra</th>
-              <th className="pb-2 text-right">Giá ra</th>
-              <th className="pb-2 text-right">Qty</th>
-              <th className="pb-2 text-right">PnL</th>
-              <th className="pb-2 text-right">R</th>
-              <th className="pb-2 text-right">MFE / MAE</th>
-              <th className="pb-2 text-right">Lý do</th>
-              <th className="pb-2 text-right">Cum PnL</th>
-            </tr>
-          </thead>
-          <tbody className="font-mono tabular">
-            {rows.map(({ t, i, cum }) => (
-              <tr key={t.id} className="border-t border-border">
-                <td className="py-1.5 text-subtle">{i}</td>
-                <td className={t.side === "long" ? "py-1.5 text-long" : "py-1.5 text-short"}>{t.side}</td>
-                <td className="py-1.5 text-muted">{shortStrategy(t.strategy)}</td>
-                <td className="py-1.5">{formatDateUtc(t.entryTime)}</td>
-                <td className="py-1.5 text-right">{t.entry.toFixed(2)}</td>
-                <td className="py-1.5">{formatDateUtc(t.exitTime)}</td>
-                <td className="py-1.5 text-right">{t.exit.toFixed(2)}</td>
-                <td className="py-1.5 text-right text-muted">{t.qty.toFixed(4)}</td>
-                <td className={t.pnl >= 0 ? "py-1.5 text-right text-long" : "py-1.5 text-right text-short"}>
-                  {formatUsd(t.pnl)}
-                </td>
-                <td className="py-1.5 text-right">{t.pnlR.toFixed(2)}</td>
-                <td className="py-1.5 text-right text-muted">
-                  {t.mfeR.toFixed(1)} / −{t.maeR.toFixed(1)}
-                </td>
-                <td className="py-1.5 text-right text-muted">{t.reason}</td>
-                <td className={cum >= 0 ? "py-1.5 text-right" : "py-1.5 text-right text-short"}>
-                  {formatUsd(cum)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <p className="mt-3 text-[11px] text-subtle">
-        {trades.length} lệnh · Cum PnL cuối {formatUsd(rows[rows.length - 1]!.cum)} · vốn ban đầu{" "}
-        {formatUsd(startEquity)}
-      </p>
+      <TradeInspector trades={trades} run={run} onReplay={onReplay} />
     </div>
   );
 }

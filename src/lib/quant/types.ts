@@ -42,7 +42,9 @@ export type PortedStrategyId =
   | "tom" // turn-of-the-month seasonality
   | "weinstein_s2" // Weinstein Stage 2 breakout
   | "e0v1e" // NFI-family long scalper (EWO + CTI dip buys)
-  | "ichiv1_plus"; // HA Ichimoku fan scalper (entry-only port)
+  | "turtle_soup" // Raschke failed-breakout fade (20-bar channel)
+  | "cum_rsi" // Connors cumulative RSI(2) + EMA200 filter
+  | "rsi_bb"; // RSI Bollinger fade (bands on the RSI series)
 
 export type StrategyId = HouseStrategyId | PortedStrategyId;
 /** "combo" = both house strategies layered (the desk default). */
@@ -75,6 +77,7 @@ export type PatternHit = {
 };
 
 export type FeatureBar = Ohlcv & {
+  nativeIntents?: import("./strategy/native-reference.ts").NativeIntent[];
   ema20: number | null;
   ema50: number | null;
   ema200: number | null;
@@ -103,6 +106,11 @@ export type FeatureBar = Ohlcv & {
   htfAdx: number | null;
   htfBias: -1 | 0 | 1;
   signal: -1 | 0 | 1;
+  /** Raw flip direction before entry gates; 0 explicitly means no exit.
+   * Undefined is reserved for legacy signal-only consumers/fixtures. */
+  exitSignal?: -1 | 0 | 1;
+  /** Only an open position with this strategy may consume exitSignal. */
+  exitStrategy?: StrategyId;
   signalReason: string;
   strategy: StrategyId | "none";
 };
@@ -249,6 +257,13 @@ export type AnalysisSnapshot = {
 };
 
 export type DeskConfig = {
+  /** Missing mode is legacy/custom-risk; native is always an explicit choice. */
+  executionMode?: "custom-risk" | "source-native";
+  /** Explicit account assumptions when the Pine wrapper omits properties. */
+  nativeFixedQty?: number;
+  nativeTickSize?: number;
+  nativeFee?: number;
+  nativeSlippageBps?: number;
   exchange: "binance" | "bybit";
   market: MarketType;
   symbols: string[];

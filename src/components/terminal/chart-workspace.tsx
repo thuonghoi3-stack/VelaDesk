@@ -183,8 +183,15 @@ export function ChartWorkspace({
   const applyEvaluation = useAlerts((s) => s.applyEvaluation);
   const markSignalSeen = useAlerts((s) => s.markSignalSeen);
 
-  const lastBar = bars[bars.length - 1] ?? null;
-  const display = hovered ?? lastBar;
+  const replayIndex = replay?.index;
+  const visibleBars = useMemo(
+    () => replayIndex == null ? bars : bars.slice(0, replayIndex),
+    [bars, replayIndex],
+  );
+  const lastBar = visibleBars[visibleBars.length - 1] ?? null;
+  // Resolve against the visible dataset: future/stale crosshair objects cannot leak.
+  const display = (hovered ? visibleBars.find((bar) => bar.time === hovered.time) : null) ?? lastBar;
+  const liveAlertsEnabled = replay === null && !replayPick;
   const indKey = useMemo(
     () => INDICATOR_CATALOG.filter((i) => indicators[i.id]).map((i) => i.id).join(","),
     [indicators],
@@ -285,7 +292,7 @@ export function ChartWorkspace({
   // Alerts evaluate wherever fresh context lands: ticker poll (price + 24h
   // change) and data reloads (RSI of the last closed bar).
   useEffect(() => {
-    if (quotesPrice == null && quotesChange == null) return;
+    if (!liveAlertsEnabled || (quotesPrice == null && quotesChange == null)) return;
     const { fired, remaining } = evaluateAlerts(alerts, symbol, {
       price: quotesPrice,
       changePct: quotesChange == null ? null : quotesChange / 100,
@@ -297,10 +304,11 @@ export function ChartWorkspace({
         description: "Mức đã chạm — kiểm tra chart.",
       });
     }
-  }, [quotesPrice, quotesChange, symbol, alerts, applyEvaluation]);
+  }, [liveAlertsEnabled, quotesPrice, quotesChange, symbol, alerts, applyEvaluation]);
 
   useEffect(() => {
-    const last = bars[bars.length - 1];
+    if (!liveAlertsEnabled) return;
+    const last = lastBar;
     if (!last || last.rsi == null) return;
     const { fired, remaining } = evaluateAlerts(alerts, symbol, { rsi: last.rsi });
     if (fired.length === 0) return;
@@ -310,11 +318,12 @@ export function ChartWorkspace({
         description: `RSI nến đóng cuối: ${last.rsi.toFixed(1)}`,
       });
     }
-  }, [bars, symbol, alerts, applyEvaluation]);
+  }, [liveAlertsEnabled, lastBar, symbol, alerts, applyEvaluation]);
 
   // One toast per closed bar that carries an entry signal (no repeats).
   useEffect(() => {
-    const last = bars[bars.length - 1];
+    if (!liveAlertsEnabled) return;
+    const last = lastBar;
     if (!last || last.signal === 0) return;
     const key = `${symbol}|${tf}|${last.time}`;
     if (useAlerts.getState().seenSignals.includes(key)) return;
@@ -322,23 +331,24 @@ export function ChartWorkspace({
     toast.message(`Signal ${last.signal === 1 ? "LONG" : "SHORT"} ${symbol}`, {
       description: `${last.strategy} · close ${last.close.toFixed(2)} · ${last.signalReason || "đủ rule"}`,
     });
-  }, [bars, symbol, tf, markSignalSeen]);
+  }, [liveAlertsEnabled, lastBar, symbol, tf, markSignalSeen]);
 
   // Bar replay playback.
   useEffect(() => {
     if (!replay?.playing) return;
     const id = window.setInterval(() => {
       setReplay((r) => {
-        if (!r) return r;
-        if (r.index >= bars.length) return { ...r, playing: false };
-        return { ...r, index: Math.min(bars.length, r.index + 1) };
+        if (!r || !r.playing) return r;
+        const index = Math.min(bars.length, r.index + 1);
+        return { index, playing: index < bars.length };
       });
-    }, 320);
+    }, replaySpeed);
     return () => window.clearInterval(id);
-  }, [replay?.playing, bars.length]);
+  }, [replay?.playing, bars.length, replaySpeed]);
 
-  function toggleReplay() {
-    if (replay) {
+  const toggleReplay = useCallback(() => {
+    setHovered(null);
+    if (replay || replayPick) {
       setReplay(null);
       setReplayPick(false);
       return;
@@ -347,13 +357,15 @@ export function ChartWorkspace({
     setAlertMode(false);
     // TV-style: first press arms the pick mode — click a bar to start there.
     setReplayPick(true);
-  }
+  }, [replay, replayPick, bars.length]);
 
   // Keyboard shortcuts: 1–8 timeframes, A alerts, R replay, "/" symbol search.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const tag = (e.target as HTMLElement | null)?.tagName ?? "";
-      if (["INPUT", "SELECT", "TEXTAREA"].includes(tag)) return;
+      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey ||
+          (e.target as HTMLElement | null)?.isContentEditable ||
+          ["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(tag)) return;
       const tfMap: Record<string, Timeframe> = {
         "1": "15m",
         "2": "1h",
@@ -379,8 +391,7 @@ export function ChartWorkspace({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- toggleReplay closes over bars.length only
-  }, [bars.length]);
+  }, [toggleReplay]);
 
   const onCreateAlert = useCallback(
     (price: number) => {
@@ -411,7 +422,6 @@ export function ChartWorkspace({
     }, "image/png");
   }
 
-  const visibleBars = replay ? bars.slice(0, replay.index) : bars;
 
   return (
     <div className="flex h-[calc(100dvh-2.75rem)] min-h-0">
@@ -579,7 +589,7 @@ export function ChartWorkspace({
           </p>
         ) : null}
         {replay ? (
-          <div className="flex items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-xs">
+          <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-xs">
             <span className="text-warn">REPLAY</span>
             <button
               type="button"
@@ -633,7 +643,7 @@ export function ChartWorkspace({
               <ChevronsRight className="size-3" />
               Hiện tại
             </button>
-            <span className="ml-auto text-[11px] text-subtle">Biểu đồ ẩn các nến sau mốc replay.</span>
+            <span className="w-full text-[11px] text-subtle sm:ml-auto sm:w-auto">Ẩn nến tương lai · tạm dừng alert trực tiếp.</span>
           </div>
         ) : null}
 
@@ -663,7 +673,8 @@ export function ChartWorkspace({
             }
             onPickReplay={(idx) => {
               setReplayPick(false);
-              setReplay({ index: Math.min(Math.max(30, idx), bars.length - 1), playing: false });
+              setHovered(null);
+              setReplay({ index: Math.min(Math.max(1, idx), bars.length), playing: false });
             }}
             onHover={setHovered}
             onCreateAlert={onCreateAlert}
@@ -671,7 +682,7 @@ export function ChartWorkspace({
             onDeleteDrawing={(id) => setDrawings((list) => list.filter((d) => d.id !== id))}
             onApiReady={onApiReadyStable}
           />
-          <div className="pointer-events-none absolute left-3 top-2 z-10 flex flex-col gap-0.5 font-mono text-[11px] tabular">
+          <div className="pointer-events-none absolute left-3 right-3 top-2 z-10 flex flex-col gap-0.5 break-words font-mono text-[11px] tabular">
             <span className="text-fg">
               {symbol} · {TF_LABEL[tf]}
               {display ? ` · O ${display.open.toFixed(2)} H ${display.high.toFixed(2)} L ${display.low.toFixed(2)} C ${display.close.toFixed(2)}` : ""}
@@ -700,7 +711,7 @@ export function ChartWorkspace({
 
         <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-1 text-[11px] text-subtle">
           <span>
-            {lastBar ? `Nến đóng ${formatDateUtc(lastBar.time)} · ${bars.length.toLocaleString("en-US")} nến` : "Chưa có dữ liệu"}
+            {lastBar ? `Nến đóng ${formatDateUtc(lastBar.time)} · ${visibleBars.length.toLocaleString("en-US")} nến` : "Chưa có dữ liệu"}
           </span>
           <span className="hidden md:inline">
             Phím: 1–8 khung · A alert · R replay · / tìm symbol · {drawings.length} hình vẽ
@@ -708,7 +719,7 @@ export function ChartWorkspace({
         </div>
       </div>
 
-      <AlertsPanel symbol={symbol} referencePrice={lastBar?.close ?? quotesPrice ?? null} />
+      <AlertsPanel symbol={symbol} referencePrice={lastBar?.close ?? (liveAlertsEnabled ? quotesPrice : null)} />
 
       {indicatorDialog ? (
         <IndicatorDialog
@@ -1255,7 +1266,7 @@ function TermChart({
               best = idx;
             }
           });
-          onPickReplayRef.current(Math.max(30, best));
+          onPickReplayRef.current(best + 1);
           return;
         }
         const activeTool = toolRef.current;

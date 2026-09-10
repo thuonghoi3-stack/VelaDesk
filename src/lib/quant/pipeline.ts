@@ -43,7 +43,11 @@ export function buildDesk(
 export function applySignals(bars: FeatureBar[], cfg: DeskConfig): FeatureBar[] {
   const out = bars.map((b) => ({
     ...b,
+    nativeIntents: undefined,
     signal: 0 as const,
+    // Explicit zero prevents legacy signal fallback on recomputed bars.
+    exitSignal: 0 as const,
+    exitStrategy: undefined,
     signalReason: "",
     strategy: "none" as const,
   }));

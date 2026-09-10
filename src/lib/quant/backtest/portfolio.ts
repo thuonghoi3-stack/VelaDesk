@@ -13,13 +13,15 @@
  *   is capped at `cfg.maxExposure × cfg.maxLeverage` of it.
  * - Daily-loss cap halts NEW entries portfolio-wide for the UTC day.
  */
+import { NativeBroker } from "./native-execution.ts";
+import { nativeUnsupported } from "../strategy/library.ts";
 import { claimGate, computeMetrics } from "./metrics.ts";
 import {
   CHANNEL_EXIT,
   REVERSION_CLASS,
   SIGNAL_EXIT_CLASS,
 } from "../strategy/library.ts";
-import { dailyLossBreached, fundingCharge, isFundingBar, utcDay } from "../risk/limits.ts";
+import { dailyLossBreached, fundingChargeBetween, utcDay } from "../risk/limits.ts";
 import { applySlippage, feeOn, planStop, sizeQty } from "../risk/sizer.ts";
 import type {
   DeskConfig,
@@ -78,6 +80,8 @@ export class PortfolioEngine {
   exposedBars = 0;
   dailyHaltDays = 0;
   maxConcurrent = 0;
+  private completed = false;
+  private native:NativeBroker[]|null=null;
 
   constructor(inputs: PortfolioInput[], cfg: DeskConfig, tf: Timeframe) {
     if (inputs.length === 0) throw new Error("portfolio needs at least one symbol");
@@ -86,6 +90,7 @@ export class PortfolioEngine {
         throw new Error(`${inp.symbol}: chỉ có ${inp.bars.length} nến — cần ≥ ${cfg.warmup + 3}`);
       }
     }
+    const unsupported=nativeUnsupported(cfg);if(unsupported)throw new Error(unsupported);
     this.inputs = inputs;
     this.cfg = cfg;
     this.tf = tf;
@@ -95,6 +100,7 @@ export class PortfolioEngine {
     this.equity = cfg.equity;
     this.peak = cfg.equity;
     this.dayStartEquity = cfg.equity;
+    if(cfg.executionMode==='source-native')this.native=inputs.map(()=>new NativeBroker(this,cfg));
 
     const timeSet = new Set<number>();
     for (const inp of inputs) for (const b of inp.bars) timeSet.add(b.time);
@@ -105,6 +111,8 @@ export class PortfolioEngine {
   }
 
   run(): void {
+    if (this.completed) return;
+    if(this.native){this.runNative();return;}
     for (const t of this.times) this.step(t);
     // Force-close whatever is still open on each symbol's last bar.
     for (let s = 0; s < this.inputs.length; s++) {
@@ -113,6 +121,36 @@ export class PortfolioEngine {
       const bars = this.inputs[s]!.bars;
       this.closeAt(s, bars[bars.length - 1]!, bars[bars.length - 1]!.close, "end_of_data", pos.remainingQty);
     }
+    const final = this.equityCurve[this.equityCurve.length - 1];
+    if (final) {
+      final.equity = this.equity;
+      this.peak = this.equityCurve.reduce((peak, p) => Math.max(peak, p.equity), this.cfg.equity);
+      final.drawdown = this.peak > 0 ? (this.peak - this.equity) / this.peak : 0;
+    }
+    this.checkDailyHalt();
+    this.completed = true;
+  }
+
+  private runNative():void {
+    const brokers=this.native!;
+    for(const t of this.times){
+      let exposed=brokers.some(b=>!!b.position);
+      for(let s=0;s<this.inputs.length;s++){
+        const bars=this.inputs[s]!.bars;
+        while(this.ptrs[s]!<bars.length&&bars[this.ptrs[s]!]!.time<t)this.ptrs[s]!++;
+        const i=this.ptrs[s]!;const bar=bars[i];if(!bar||bar.time!==t)continue;
+        exposed=brokers[s]!.step(bar,i,bar.nativeIntents??[])||exposed;
+        this.lastClose[s]=bar.close;
+        this.maxConcurrent=Math.max(this.maxConcurrent,brokers.filter(b=>!!b.position).length);
+        if(i===bars.length-1)brokers[s]!.finish(bar);
+        this.ptrs[s]!++;
+      }
+      if(exposed)this.exposedBars++;this.exposedFlags.push(exposed);
+      const mtm=this.equity+brokers.reduce((a,b,s)=>a+b.markToMarket(this.lastClose[s]!)-this.equity,0);
+      this.peak=Math.max(this.peak,mtm);this.equityCurve.push({time:t,equity:mtm,drawdown:this.peak>0?(this.peak-mtm)/this.peak:0});
+    }
+    this.trades=brokers.flatMap((b,s)=>b.trades.map(t=>({...t,symbol:this.inputs[s]!.symbol}))).sort((a,b)=>a.exitTime-b.exitTime);
+    this.completed=true;
   }
 
   private step(t: number): void {
@@ -124,7 +162,7 @@ export class PortfolioEngine {
     }
     const key = utcDay(t);
     if (key !== this.dayKey) {
-      if (this.halted) this.dailyHaltDays += 1;
+
       this.dayKey = key;
       this.dayPnl = 0;
       this.dayStartEquity = this.equityCurve.length
@@ -133,9 +171,7 @@ export class PortfolioEngine {
       this.halted = false;
     }
 
-    const hadOpen = this.positions.some((p) => p != null);
-    if (hadOpen) this.exposedBars += 1;
-    this.exposedFlags.push(hadOpen);
+    let exposed = this.positions.some((p) => p != null);
 
     // — manage every open position on its own bar at time t —
     for (let s = 0; s < this.inputs.length; s++) {
@@ -150,11 +186,13 @@ export class PortfolioEngine {
       // SIGNAL_EXIT profile: opposite signal from the same strategy reverses.
       if (ptr > 0) {
         const sigBar = bars[ptr - 1]!;
+        const exitSignal = sigBar.exitSignal ?? sigBar.signal;
+        const exitStrategy = sigBar.exitSignal !== undefined ? sigBar.exitStrategy : sigBar.strategy;
         if (
           pos.signalExit &&
-          sigBar.signal !== 0 &&
-          sigBar.strategy === pos.strategy &&
-          (pos.side === "long" ? sigBar.signal === -1 : sigBar.signal === 1)
+          exitSignal !== 0 &&
+          exitStrategy === pos.strategy &&
+          (pos.side === "long" ? exitSignal === -1 : exitSignal === 1)
         ) {
           this.closeAt(s, bar, bar.open, "signal_flip", pos.remainingQty);
         }
@@ -163,8 +201,10 @@ export class PortfolioEngine {
     }
 
     // — entries: symbols without a position, in input order, capacity-limited —
+    this.checkDailyHalt();
     if (!this.halted) {
       for (let s = 0; s < this.inputs.length; s++) {
+        if (this.halted) break;
         if (this.positions.filter((p) => p != null).length >= this.cfg.maxPositions) break;
         if (this.positions[s]) continue;
         const bars = this.inputs[s]!.bars;
@@ -173,9 +213,17 @@ export class PortfolioEngine {
         const sigBar = bars[ptr - 1]!;
         if (sigBar.signal === 0) continue;
         this.tryEnter(s, bars[ptr]!, sigBar, ptr);
+        if (this.positions[s]) {
+          exposed = true;
+          this.maxConcurrent = Math.max(this.maxConcurrent, this.positions.filter(p => p != null).length);
+          this.managePosition(s, bars[ptr]!);
+        }
+        this.checkDailyHalt();
       }
     }
 
+    if (exposed) this.exposedBars += 1;
+    this.exposedFlags.push(exposed);
     // advance past the current bar
     for (let s = 0; s < this.inputs.length; s++) {
       const bars = this.inputs[s]!.bars;
@@ -190,16 +238,21 @@ export class PortfolioEngine {
     const dd = this.peak > 0 ? (this.peak - mtm) / this.peak : 0;
     this.equityCurve.push({ time: t, equity: mtm, drawdown: dd });
 
-    if (dailyLossBreached(this.dayPnl, this.dayStartEquity, this.cfg)) {
+    this.checkDailyHalt();
+  }
+
+  private checkDailyHalt(): void {
+    if (!this.halted && dailyLossBreached(this.dayPnl, this.dayStartEquity, this.cfg)) {
       this.halted = true;
+      this.dailyHaltDays += 1;
     }
   }
 
   private chargeFunding(s: number, bar: FeatureBar): void {
     const pos = this.positions[s]!;
-    if (!isFundingBar(bar.time, this.tf)) return;
-    const notional = pos.remainingQty * bar.close;
-    const fee = fundingCharge(notional, this.cfg, this.tf);
+    const from = Math.max(pos.entryTime, this.inputs[s]!.bars[this.ptrs[s]! - 1]?.time ?? pos.entryTime);
+    const notional = pos.remainingQty * bar.open;
+    const fee = fundingChargeBetween(notional, this.cfg, from, bar.time);
     this.equity -= fee;
     this.dayPnl -= fee;
     pos.fundingPaid += fee;
@@ -220,8 +273,7 @@ export class PortfolioEngine {
     const stop = side === "long" ? fill - plan.dist : fill + plan.dist;
     const riskPerUnit = Math.abs(fill - stop);
     if (riskPerUnit <= 0) return;
-    if (side === "long" && fillBar.low <= stop) return;
-    if (side === "short" && fillBar.high >= stop) return;
+
 
     const signalExit = SIGNAL_EXIT_CLASS.has(strategy) || CHANNEL_EXIT[strategy] !== undefined;
     const qty = sizeQty(this.equity, this.cfg, fill, riskPerUnit);
@@ -266,7 +318,7 @@ export class PortfolioEngine {
       signalExit,
       exitChannelBars: CHANNEL_EXIT[strategy],
     };
-    if (REVERSION_CLASS.has(strategy) && sigBar.bbMid != null) {
+    if (REVERSION_CLASS.has(strategy) && strategy !== "e0v1e" && sigBar.bbMid != null) {
       pos.tp1 = sigBar.bbMid;
       pos.tp2 = sigBar.bbMid;
     }
@@ -276,6 +328,13 @@ export class PortfolioEngine {
   private managePosition(s: number, bar: FeatureBar): void {
     const pos = this.positions[s]!;
     pos.barsHeld += 1;
+    // Existing protection resolves before learning favorable extrema or close exits.
+    const hitStop = pos.side === "long" ? bar.low <= pos.stop : bar.high >= pos.stop;
+    if (hitStop) {
+      const raw = pos.side === "long" ? Math.min(bar.open, pos.stop) : Math.max(bar.open, pos.stop);
+      this.closeAt(s, bar, raw, "stop", pos.remainingQty);
+      return;
+    }
     const fav = pos.side === "long" ? bar.high - pos.entry : pos.entry - bar.low;
     pos.rReached = Math.max(pos.rReached, fav / pos.riskPerUnit);
     const adv = pos.side === "long" ? pos.entry - bar.low : bar.high - pos.entry;
@@ -317,14 +376,10 @@ export class PortfolioEngine {
       }
     }
 
-    const hitStop = pos.side === "long" ? bar.low <= pos.stop : bar.high >= pos.stop;
     const hitTp1 = !pos.signalExit && (pos.side === "long" ? bar.high >= pos.tp1 : bar.low <= pos.tp1);
     const hitTp2 = !pos.signalExit && (pos.side === "long" ? bar.high >= pos.tp2 : bar.low <= pos.tp2);
 
-    if (hitStop) {
-      this.closeAt(s, bar, pos.stop, "stop", pos.remainingQty);
-      return;
-    }
+
 
     if (!pos.tp1Done && hitTp1) {
       this.closeAt(s, bar, pos.tp1, "tp1", pos.remainingQty * this.cfg.tp1ClosePct);
@@ -361,15 +416,17 @@ export class PortfolioEngine {
     const px = applySlippage(rawPrice, pos.side, false, this.cfg.slippageBps);
     const gross = pos.side === "long" ? (px - pos.entry) * fillQty : (pos.entry - px) * fillQty;
     const fee = feeOn(fillQty * px, this.cfg.takerFee);
-    const pnl = gross - fee;
+    const entryFeeShare = feeOn(fillQty * pos.entry, this.cfg.takerFee);
+    const pnl = gross - fee - entryFeeShare;
     const pnlR =
       pos.riskPerUnit > 0
         ? ((px - pos.entry) * (pos.side === "long" ? 1 : -1)) / pos.riskPerUnit
         : 0;
-    const fundingShare = (fillQty / Math.max(pos.qty, 1e-12)) * pos.fundingPaid;
+    const fundingShare = (fillQty / pos.remainingQty) * pos.fundingPaid;
     pos.fundingPaid -= fundingShare;
-    this.equity += pnl;
-    this.dayPnl += pnl;
+    // Allocations report costs already paid; cash books only this exit.
+    this.equity += gross - fee;
+    this.dayPnl += gross - fee;
     this.trades.push({
       id: `${pos.id}-${reason}-${this.trades.length}`,
       symbol: this.inputs[s]!.symbol,
@@ -384,7 +441,7 @@ export class PortfolioEngine {
       pnlR,
       mfeR: pos.rReached,
       maeR: pos.maeR,
-      fees: fee,
+      fees: fee + entryFeeShare,
       funding: fundingShare,
       reason,
       barsHeld: pos.barsHeld,

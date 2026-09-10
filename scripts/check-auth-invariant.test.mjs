@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtempSync, symlinkSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -95,11 +95,35 @@ test("the build side resolves the template's shipped app-env", () => {
   assert.equal(buildAuthEnabled(projectRoot(), { VITE_AUTH_ENABLED: "true" }), true);
 });
 
-test("the CLI reports rather than silently passing when run via a symlink", async () => {
+test("the CLI reports through a true file symlink when the OS permits it", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "auth-invariant-file-link-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const link = join(root, "check-auth-invariant.mjs");
+  try {
+    symlinkSync(join(projectRoot(), "scripts/check-auth-invariant.mjs"), link, "file");
+  } catch (error) {
+    if (process.platform === "win32" && error.code === "EPERM") {
+      t.skip("True Windows file-symlink coverage unavailable: EPERM; requires Developer Mode or symlink privilege. Directory junction is covered separately.");
+      return;
+    }
+    throw error;
+  }
+  const error = await promisify(execFile)(process.execPath, [link, "--dev-url", "http://127.0.0.1:1"]).catch((err) => err);
+  assert.equal(error.code, 2);
+  assert.match(error.stderr, /could not read the dev server's resolved VITE_AUTH_ENABLED/);
+});
+
+test("the CLI reports through a directory link (Windows junction / POSIX symlink)", async (t) => {
   // A check whose exit code is the whole signal must never no-op to 0 because
   // process.argv[1] came in through a symlinked path.
-  const link = join(mkdtempSync(join(tmpdir(), "auth-invariant-link-")), "scripts");
-  symlinkSync(join(projectRoot(), "scripts"), link);
+  const root = mkdtempSync(join(tmpdir(), "auth-invariant-link-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const link = join(root, "scripts");
+  symlinkSync(join(projectRoot(), "scripts"), link, process.platform === "win32" ? "junction" : "dir");
+  assert.equal(realpathSync(link), realpathSync(join(projectRoot(), "scripts")));
+  if (process.platform === "win32") {
+    t.diagnostic("Directory junction coverage; not equivalent to privileged Windows file-symlink coverage.");
+  }
   const error = await promisify(execFile)(process.execPath, [
     join(link, "check-auth-invariant.mjs"),
     "--dev-url",

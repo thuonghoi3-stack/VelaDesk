@@ -1,24 +1,11 @@
 /**
- * Strategy library — ports of well-known TradingView strategies.
- *
- * Porting contract (read before touching):
- * - Each port keeps the Pine entry logic 1:1 (same formulas, same crossover
- *   conditions) and is self-contained like a Pine script: it computes its own
- *   series from OHLCV instead of leaning on the desk's feature columns, so a
- *   port can be diffed against its Pine source line by line.
- * - Pine's default execution model (signal evaluated at bar close, order
- *   filled at the NEXT bar's open) maps exactly onto this desk's next-bar
- *   fill, so no timing adaptation is needed on entries.
- * - EXITS ARE ADAPTED, not ported: the VelaDesk risk engine (ATR stop +
- *   TP ladder + break-even trail + time stop) manages every trade. A port
- *   that exits on its own flip in Pine (Supertrend) here re-enters on flips
- *   but exits through the shared risk engine. Backtest numbers will therefore
- *   differ from TradingView's own tester — by design, since fees/slippage/
- *   funding and position sizing also differ.
- * - Everything is causal: values at i use bars ≤ i (the Ichimoku cloud is
- *   displaced BACK 26 bars — the value plotted at i on TV — never forward).
+ * Strategy library: legacy custom-risk adaptations and an explicitly selected
+ * source-native path for seven pinned wrappers. Custom ports are NOT 1:1 Pine
+ * implementations. Native frames retain market/stop/cancel/OCA API calls;
+ * execution uses the local broker, not a TradingView runtime. Source-default
+ * formula translations and unresolved builtin differences: NATIVE_CONTRACT.md.
  */
-
+import { evaluateNative, type NativeStrategy } from "./native-reference.ts";
 import { heikinAshi } from "../../terminal/ha.ts";
 import type { DeskConfig, FeatureBar, PortedStrategyId } from "../types.ts";
 
@@ -168,6 +155,9 @@ export const REVERSION_CLASS: ReadonlySet<string> = new Set([
   "stoch_rsi",
   "tom",
   "e0v1e",
+  "turtle_soup",
+  "cum_rsi",
+  "rsi_bb",
 ]);
 
 /**
@@ -917,91 +907,111 @@ function portE0v1e(ctx: PortCtx): void {
 }
 
 /**
- * ichiV1_plus (NFI family, 5m): ENTRY-ONLY port — HA-based Ichimoku
- * (20/60/120/30, displaced 30) + 8-level EMA fan, long-only, all conditions
- * AND-ed. Ported from vaskosmihaylov/nfi-custom-strategies
- * ichiv1_plus.py with the author's default buy_params
- * (above_senkou_level=1, bullish_level=5, fan_gain=1.002, fan_shift=3).
- *
- * The source's exit system (confirmation-count sells, 40% partial exits,
- * dynamic ROI profiles) is NOT ported in this step — the desk approximates
- * with the reversion class (R-ladder TP + time stop + ATR stop).
+ * Sideway scalpers — strategies that FADE price extremes inside ranging
+ * markets. All causal; all reversion-class in the desk engine.
  */
-const ICHI_TENKAN = 20;
-const ICHI_KIJUN = 60;
-const ICHI_SENKOU_B = 120;
-const ICHI_DISP = 30;
-const ICHI_FAN = [1, 3, 6, 12, 24, 48, 72, 96] as const;
 
-/** ichiV1_plus: long on full confluence (HA close above cloud, bullish fan, rising magnitude). */
-function portIchiv1Plus(ctx: PortCtx): void {
-  const { bars, warmup } = ctx;
-  const ha = heikinAshi(bars);
-  const haHigh = ha.map((b) => b.high);
-  const haLow = ha.map((b) => b.low);
-  const haOpen = ha.map((b) => b.open);
+const TS_LOOKBACK = 20;
+const TS_PROBE = 3; // failed-breakout probe window (bars)
+
+/**
+ * Turtle Soup (Linda Raschke & Larry Connors, "Street Smarts"):
+ * a break of the 20-bar low that FAILS to follow through (price closes back
+ * above the prior low within 3 bars) is faded long; mirror for failed
+ * breakouts of the 20-bar high. Base channel excludes the probe window.
+ */
+function portTurtleSoup(ctx: PortCtx): void {
+  const { bars, warmup, allowShort } = ctx;
+  const lows = bars.map((b) => b.low);
+  const highs = bars.map((b) => b.high);
   const closes = bars.map((b) => b.close);
-
-  // EMA fan: periods approximate 5m→8h EMAs on the base timeframe.
-  const closeFan = ICHI_FAN.map((p) => emaSeries(closes, p));
-  const openFan = ICHI_FAN.map((p) => emaSeries(haOpen, p));
-
-  // Senkou spans as PLOTTED at row i: computed at i−30 (causal, no look-ahead).
-  const senkouA: Array<number | null> = new Array(bars.length).fill(null);
-  const senkouB: Array<number | null> = new Array(bars.length).fill(null);
-  for (let i = ICHI_DISP; i < bars.length; i++) {
-    const j = i - ICHI_DISP;
-    const t = donchianMid(haHigh, haLow, j, ICHI_TENKAN);
-    const k = donchianMid(haHigh, haLow, j, ICHI_KIJUN);
-    const b = donchianMid(haHigh, haLow, j, ICHI_SENKOU_B);
-    if (t != null && k != null && b != null) {
-      senkouA[i] = (t + k) / 2;
-      senkouB[i] = b;
+  const from = Math.max(warmup, TS_LOOKBACK + TS_PROBE + 1);
+  for (let i = from; i < bars.length; i++) {
+    // Base channel: N bars ending 4 bars back (before the probe window).
+    const baseEnd = i - TS_PROBE - 1;
+    let lo20 = lows[baseEnd - TS_LOOKBACK + 1]!;
+    let hi20 = highs[baseEnd - TS_LOOKBACK + 1]!;
+    for (let k = baseEnd - TS_LOOKBACK + 2; k <= baseEnd; k++) {
+      if (lows[k]! < lo20) lo20 = lows[k]!;
+      if (highs[k]! > hi20) hi20 = highs[k]!;
     }
-  }
-
-  // fan_magnitude = trend_close_1h / trend_close_8h (EMA12 / EMA96 here).
-  const fanMag: Array<number | null> = new Array(bars.length).fill(null);
-  for (let i = 0; i < bars.length; i++) {
-    const a = closeFan[3][i];
-    const b = closeFan[7][i];
-    if (a != null && b != null && b > 0) fanMag[i] = a / b;
-  }
-
-  for (let i = warmup; i < bars.length; i++) {
-    const sa = senkouA[i];
-    const sb = senkouB[i];
-    if (sa == null || sb == null) continue;
-
-    // above_senkou_level = 1: real close above both cloud lines at row i.
-    const c = closes[i];
-    if (!(c > sa && c > sb)) continue;
-
-    // bullish_level = 5: trend_close > trend_open for fan tiers 1..5.
-    let bullish = true;
-    for (let lvl = 0; lvl < 5; lvl++) {
-      const cE = closeFan[lvl][i];
-      const oE = openFan[lvl][i];
-      if (cE == null || oE == null || cE <= oE) {
-        bullish = false;
-        break;
-      }
+    // Probe: any of the last 3 bars (incl. current) pierced the channel.
+    let piercedLow = false;
+    let piercedHigh = false;
+    for (let k = i - TS_PROBE + 1; k <= i; k++) {
+      if (lows[k]! < lo20) piercedLow = true;
+      if (highs[k]! > hi20) piercedHigh = true;
     }
-    if (!bullish) continue;
-
-    const mag = fanMag[i];
-    const gPrev = i > 0 ? fanMag[i - 1] : null;
-    const gPrev2 = i > 1 ? fanMag[i - 2] : null;
-    const gPrev3 = i > 2 ? fanMag[i - 3] : null;
-    if (mag == null || gPrev == null || gPrev2 == null || gPrev3 == null) continue;
-    if (mag <= 1) continue;
-    if (gPrev < 1.002) continue;
-    // Rising 3 consecutive bars.
-    if (!(gPrev < mag && gPrev2 < gPrev && gPrev3 < gPrev2)) continue;
-
-    mark(bars[i]!, 1, "ichiv1_plus");
+    if (piercedLow && closes[i]! > lo20) mark(bars[i]!, 1, "turtle_soup");
+    else if (allowShort && piercedHigh && closes[i]! < hi20) mark(bars[i]!, -1, "turtle_soup");
   }
 }
+
+/**
+ * Connors Cumulative RSI: sum of the last two RSI(2) values. Long when it
+ * dips below 35 WITH the 200-EMA trend filter; short mirror above 165.
+ */
+function portCumRsi(ctx: PortCtx): void {
+  const { bars, warmup, allowShort } = ctx;
+  const closes = bars.map((b) => b.close);
+  const rsi2 = rsiSeries(closes, 2);
+  for (let i = warmup; i < bars.length; i++) {
+    const e = bars[i]!.ema200;
+    const a = rsi2[i];
+    const b = i > 0 ? rsi2[i - 1] : null;
+    if (e == null || a == null || b == null) continue;
+    const cum = a + b;
+    if (cum < 35 && closes[i]! > e) mark(bars[i]!, 1, "cum_rsi");
+    else if (allowShort && cum > 165 && closes[i]! < e) mark(bars[i]!, -1, "cum_rsi");
+  }
+}
+
+/**
+ * RSI Bollinger fade: RSI(14) pierces its own lower Bollinger band (20, 2)
+ * then closes back above it — fade back toward the RSI midline. Mirror for
+ * the upper band.
+ */
+function portRsiBb(ctx: PortCtx): void {
+  const { bars, warmup, allowShort } = ctx;
+  const rsi = rsiSeries(bars.map((b) => b.close), 14);
+  const n = bars.length;
+  const lower: Array<number | null> = new Array(n).fill(null);
+  const upper: Array<number | null> = new Array(n).fill(null);
+  for (let i = 19; i < n; i++) {
+    let sum = 0;
+    let ok = true;
+    for (let k = i - 19; k <= i; k++) {
+      const v = rsi[k];
+      if (v == null) {
+        ok = false;
+        break;
+      }
+      sum += v;
+    }
+    if (!ok) continue;
+    const mid = sum / 20;
+    let acc = 0;
+    for (let k = i - 19; k <= i; k++) {
+      const d = rsi[k]! - mid;
+      acc += d * d;
+    }
+    const sd = Math.sqrt(acc / 20);
+    lower[i] = mid - 2 * sd;
+    upper[i] = mid + 2 * sd;
+  }
+  for (let i = Math.max(40, warmup); i < n; i++) {
+    const r = rsi[i];
+    const rPrev = rsi[i - 1];
+    const lo = lower[i];
+    const loPrev = lower[i - 1];
+    const up = upper[i];
+    const upPrev = upper[i - 1];
+    if (r == null || rPrev == null || lo == null || loPrev == null || up == null || upPrev == null) continue;
+    if (rPrev < loPrev && r > lo) mark(bars[i]!, 1, "rsi_bb");
+    else if (allowShort && rPrev > upPrev && r < up) mark(bars[i]!, -1, "rsi_bb");
+  }
+}
+
 // --------------------------------- registry ---------------------------------
 
 export type StrategyMeta = {
@@ -1332,20 +1342,42 @@ export const STRATEGY_LIBRARY: StrategyMeta[] = [
     ],
   },
   {
-    id: "ichiv1_plus",
-    name: "ichiV1 Plus",
-    origin: "vaskosmihaylov/nfi-custom-strategies · HA Ichimoku fan (20/60/120/30)",
-    style: "Trend",
+    id: "turtle_soup",
+    name: "Turtle Soup",
+    origin: "Raschke & Connors · Street Smarts (fade 20 nến)",
+    style: "Reversion",
     rules: [
-      "Nền Heikin Ashi; Ichimoku phi chuẩn 20/60/120/30, mây dịch 30 (causal)",
-      "above_senkou_level 1: close > cả senkou_a/b tại dòng hiện tại",
-      "bullish_level 5: 5 tầng fan EMA (1/3/6/12/24) đều close-EMA > open-EMA",
-      "fan_magnitude(EMA12/EMA96) > 1, gain ≥ 1.002 và tăng 3 nến liên tiếp",
-      "Entry-only xấp xỉ: exit qua reversion class (TP ladder + time stop)",
+      "Setup: giá thủng kênh 20 nến trong 3 nến gần nhất (breakdown hụt)",
+      "Long: close quay LẠI trên đáy kênh 20 — fade failed breakdown",
+      "Short: close tụt lại dưới đỉnh kênh 20 — fade failed breakout",
+      "Exit gốc: target giữa range, stop dưới cực giá probe — desk: TP ladder + time stop",
+    ],
+  },
+  {
+    id: "cum_rsi",
+    name: "Connors Cumulative RSI",
+    origin: "Larry Connors · Cumulative RSI(2) < 35 / > 165 + EMA200",
+    style: "Reversion",
+    rules: [
+      "CumRSI = RSI(2) hôm nay + RSI(2) hôm trước",
+      "Long: CumRSI < 35 VÀ close trên EMA200 (filter trend)",
+      "Short: CumRSI > 165 VÀ close dưới EMA200",
+      "Edge theo Connors: reversion ngắn hạn có trend filter ít thua hơn",
+    ],
+  },
+  {
+    id: "rsi_bb",
+    name: "RSI Bollinger Fade",
+    origin: "Cộng đồng · RSI(14) tự có Bollinger (20, 2σ) — fade vùng cực",
+    style: "Reversion",
+    rules: [
+      "Bollinger tính trên CHUỖI RSI (không phải giá) — dynamic oversold/overbought",
+      "Long: RSI thủng dải dưới rồi đóng lại LÊN trên dải",
+      "Short: RSI vượt dải trên rồi đóng lại XUỐNG dưới dải",
+      "Thích nghi theo vol của chính RSI — không kẹt mức 30/70 tĩnh",
     ],
   },
 ];
-
 
 
 
@@ -1379,7 +1411,9 @@ const PORTS: Record<PortedStrategyId, (ctx: PortCtx) => void> = {
   tom: portTom,
   weinstein_s2: portWeinsteinS2,
   e0v1e: portE0v1e,
-  ichiv1_plus: portIchiv1Plus,
+  turtle_soup: portTurtleSoup,
+  cum_rsi: portCumRsi,
+  rsi_bb: portRsiBb,
 };
 
 /**
@@ -1389,14 +1423,51 @@ const PORTS: Record<PortedStrategyId, (ctx: PortCtx) => void> = {
  * — the same discipline the house strategies apply. ADX thresholds are the
  * ones already used by the desk's regime classifier (20/25), not tuned knobs.
  */
+export const NATIVE_STRATEGIES: Partial<Record<string, NativeStrategy>> = {macd:"macd",rsi_reversion:"rsi",stoch_reversion:"stochastic-slow",supertrend:"supertrend",bb_reversion:"bollinger-bands",keltner:"keltner",psar:"psar"};
+export function nativeUnsupported(cfg:DeskConfig):string|null {
+  if(cfg.executionMode!=="source-native")return null;
+  if(NATIVE_STRATEGIES[cfg.strategyId]) {
+    if(!Number.isFinite(cfg.nativeTickSize)||!(cfg.nativeTickSize!>0)||!Number.isFinite(cfg.nativeFixedQty)||!(cfg.nativeFixedQty!>0)||!Number.isFinite(cfg.nativeFee)||cfg.nativeFee!<0||!Number.isFinite(cfg.nativeSlippageBps)||cfg.nativeSlippageBps!<0)return "Source-native invalid account assumptions: supply positive tick/fixed quantity and nonnegative fee/slippage.";
+    return null;
+  }
+  return `Source-native ${cfg.strategyId} unsupported: no complete native executor. E0V1E callback scheduling/indicators remain unresolved. Choose custom-risk adaptation explicitly.`;
+}
 export function applyLibraryStrategy(bars: FeatureBar[], id: PortedStrategyId, cfg: DeskConfig): void {
+  if(cfg.executionMode==="source-native") {
+    const strategy=NATIVE_STRATEGIES[id];
+    if(!strategy||nativeUnsupported(cfg))return;
+    const frames=evaluateNative(strategy,bars,{mintick:cfg.nativeTickSize});
+    frames.forEach((f,i)=>{ const b=bars[i]!;b.nativeIntents=f.intents;
+      const entry=[...f.intents].reverse().find(o=>o.kind==='entry');
+      b.signalReason=f.intents.map(o=>o.kind==='cancel'?`cancel ${o.id}`:`${o.id} ${o.order.kind}${o.order.kind==='stop'?` @ ${o.order.price}`:''}`).join('; ');
+      if(entry?.kind==='entry'){b.signal=entry.side==='long'?1:-1;b.strategy=id;}
+    });return;
+  }
   const port = PORTS[id];
   port({
     bars,
     cfg,
-    warmup: Math.min(cfg.warmup, Math.max(0, bars.length - 2)),
-    allowShort: cfg.side === "both",
+    // Readiness must not change when future bars are appended.
+    warmup: cfg.warmup,
+    // Compute both directions for flip exits before applying entry gates.
+    // Non-flip profiles retain their existing short-signal restriction.
+    allowShort: cfg.side === "both" || SIGNAL_EXIT_CLASS.has(id),
   });
+  if (SIGNAL_EXIT_CLASS.has(id)) {
+    for (const b of bars) {
+      b.exitSignal = b.strategy === id ? b.signal : 0;
+      b.exitStrategy = b.exitSignal === 0 ? undefined : id;
+    }
+  }
+  if (cfg.side !== "both") {
+    for (const b of bars) {
+      if (b.strategy === id && b.signal === -1) {
+        b.signal = 0;
+        b.signalReason = "";
+        b.strategy = "none";
+      }
+    }
+  }
   if (!cfg.regimeFilterPorts) return;
   const gate = REVERSION_CLASS.has(id) ? "range" : "trend";
   const adxMin = cfg.portAdxMin;

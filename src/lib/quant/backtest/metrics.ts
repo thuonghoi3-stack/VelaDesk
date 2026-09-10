@@ -1,7 +1,9 @@
 import type { EquityPoint, LosingPeriod, Metrics, Regime, Trade } from "../types.ts";
 
-function dailyReturns(equity: EquityPoint[]): number[] {
-  if (equity.length < 2) return [];
+// Curves contain post-bar marks; include initial capital to first observed
+// UTC-day final mark. Missing calendar days are not fabricated as flat returns.
+function dailyReturns(startEquity: number, equity: EquityPoint[]): number[] {
+  if (equity.length === 0) return [];
   const byDay = new Map<string, number>();
   for (const p of equity) {
     const d = new Date(p.time).toISOString().slice(0, 10);
@@ -9,8 +11,8 @@ function dailyReturns(equity: EquityPoint[]): number[] {
   }
   const days = [...byDay.keys()].sort();
   const rets: number[] = [];
-  for (let i = 1; i < days.length; i++) {
-    const a = byDay.get(days[i - 1]!)!;
+  for (let i = 0; i < days.length; i++) {
+    const a = i === 0 ? startEquity : byDay.get(days[i - 1]!)!;
     const b = byDay.get(days[i]!)!;
     if (a > 0) rets.push(b / a - 1);
   }
@@ -38,16 +40,20 @@ export function computeMetrics(
   exposedBars: number,
 ): Metrics {
   const endEquity = equity.length ? equity[equity.length - 1]!.equity : startEquity;
+  // API has no initial-capital timestamp or bar duration: retain observed
+  // timestamp-span CAGR convention (minimum one day), not invented timing.
   const t0 = equity[0]?.time ?? 0;
   const t1 = equity[equity.length - 1]?.time ?? t0;
   const days = Math.max(1, (t1 - t0) / 86_400_000);
   const cagr = startEquity > 0 ? (endEquity / startEquity) ** (365 / days) - 1 : 0;
-  const rets = dailyReturns(equity);
+  const rets = dailyReturns(startEquity, equity);
   const m = mean(rets);
   const s = std(rets);
   const sharpe = s > 0 ? (m / s) * Math.sqrt(365) : 0;
-  const down = rets.filter((r) => r < 0);
-  const ds = std(down.length ? down : [0]);
+  // Zero-target downside deviation uses ALL daily observations, not the
+  // sample standard deviation of losses. No downside => finite 0 sentinel
+  // (not infinity / a claim of risk-free performance).
+  const ds = Math.sqrt(mean(rets.map((r) => Math.min(r, 0) ** 2)));
   const sortino = ds > 0 ? (m / ds) * Math.sqrt(365) : 0;
   let maxDd = 0;
   for (const p of equity) maxDd = Math.max(maxDd, p.drawdown);

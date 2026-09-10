@@ -144,13 +144,13 @@ export function computeIndicators(ohlcv: Ohlcv[]): FeatureBar[] {
   if (n > 14) {
     let avgGain = wilderInit(gain.slice(1, 15), 14);
     let avgLoss = wilderInit(loss.slice(1, 15), 14);
-    const rs0 = avgLoss === 0 ? 100 : avgGain / avgLoss;
-    out[14]!.rsi = 100 - 100 / (1 + rs0);
+    // No-loss-first convention: all gains => 100; flat (0/0) also => 100,
+    // matching the library RSI helper. This convention is not upstream parity.
+    out[14]!.rsi = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
     for (let i = 15; i < n; i++) {
       avgGain = (avgGain * 13 + gain[i]!) / 14;
       avgLoss = (avgLoss * 13 + loss[i]!) / 14;
-      const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-      out[i]!.rsi = 100 - 100 / (1 + rs);
+      out[i]!.rsi = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
     }
   }
 
@@ -210,8 +210,8 @@ export function computeIndicators(ohlcv: Ohlcv[]): FeatureBar[] {
     out[i]!.stochD = (a + b + c) / 3;
   }
 
-  // ADX 14
-  if (n > 28) {
+  // ADX 14: fourteen DX observations (indices 14..27) need 28 bars.
+  if (n >= 28) {
     let smTr = wilderInit(tr.slice(1, 15), 14);
     let smP = wilderInit(plusDm.slice(1, 15), 14);
     let smM = wilderInit(minusDm.slice(1, 15), 14);

@@ -68,6 +68,11 @@ export const TIME_STOP: Record<Timeframe, number> = {
 export function defaultConfig(partial?: Partial<DeskConfig>): DeskConfig {
   const ltf = partial?.ltf ?? "1h";
   return {
+    executionMode: "custom-risk",
+    nativeFixedQty: 1,
+    nativeTickSize: 0.01,
+    nativeFee: 0,
+    nativeSlippageBps: 0,
     exchange: "binance",
     market: "usdm",
     symbols: [...SYMBOLS],

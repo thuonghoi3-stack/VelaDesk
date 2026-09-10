@@ -1,0 +1,386 @@
+{
+  "MACD_Strategy": {
+    "sha256": "f0598362b1163f64fcd47ef4b37f6082961e61c163b1b75be915cf50d0920586",
+    "metadata": {
+      "url": "https://pine-facade.tradingview.com/pine-facade/get/STD%3BMACD%251Strategy/31.0",
+      "status": 200,
+      "script": {
+        "userId": 605017,
+        "scriptName": "MACD Strategy",
+        "scriptSource": "",
+        "scriptAccess": "open_no_auth",
+        "scriptIdPart": "STD;MACD%1Strategy",
+        "version": "31.0",
+        "extra": {
+          "isAuto": false,
+          "isBeta": false,
+          "isBuiltIn": true,
+          "isCompiled": true,
+          "isNew": false,
+          "isPineEditorNewTemplate": true,
+          "isUpdated": false,
+          "is_price_study": true,
+          "kind": "strategy",
+          "shortDescription": "MACD Strategy",
+          "sourceInputsCount": 0,
+          "tags": [
+            "Moving Average Convergence Divergence"
+          ]
+        },
+        "lastVersionMaj": "0.0"
+      },
+      "retrieved_at": "2026-09-10T20:55:50.362427+00:00",
+      "sha256": "3c4c6cd0fb69fcf5b18a85ac657eeae3af7cf339e794e754f7b34aabdf04f636",
+      "response": {
+        "created": "2026-09-02T09:33:15.221652Z",
+        "extra": {
+          "isAuto": false,
+          "isBeta": false,
+          "isBuiltIn": true,
+          "isCompiled": true,
+          "isNew": false,
+          "isPineEditorNewTemplate": true,
+          "isUpdated": false,
+          "is_price_study": true,
+          "kind": "strategy",
+          "sourceInputsCount": 0
+        },
+        "lastVersionMaj": "31.0",
+        "scriptAccess": "open_no_auth",
+        "scriptName": "MACD Strategy",
+        "source": "//@version=6\nstrategy(\"MACD Strategy\", overlay=true)\nfastLength = input(12, \"Fast length\")\nslowlength = input(26, \"Slow length\")\nMACDLength = input(9, \"MACD length\")\nMACD = ta.ema(close, fastLength) - ta.ema(close, slowlength)\naMACD = ta.ema(MACD, MACDLength)\ndelta = MACD - aMACD\nif (ta.crossover(delta, 0))\n\tstrategy.entry(\"MacdLE\", strategy.long, comment=\"MacdLE\")\nif (ta.crossunder(delta, 0))\n\tstrategy.entry(\"MacdSE\", strategy.short, comment=\"MacdSE\")\n//plot(strategy.equity, title=\"equity\", color=color.red, linewidth=2, style=plot.style_areabr)",
+        "updated": "2026-09-02T09:33:15.221652Z",
+        "version": "31.0"
+      }
+    }
+  },
+  "RSI_Strategy": {
+    "sha256": "922ae5c909ac940062b7a65ca396290727ce695b2a43b280510b6b2736b6dc37",
+    "metadata": {
+      "url": "https://pine-facade.tradingview.com/pine-facade/get/STD%3BRSI%251Strategy/31.0",
+      "status": 200,
+      "script": {
+        "userId": 605017,
+        "scriptName": "RSI Strategy",
+        "scriptSource": "",
+        "scriptAccess": "open_no_auth",
+        "scriptIdPart": "STD;RSI%1Strategy",
+        "version": "31.0",
+        "extra": {
+          "isAuto": false,
+          "isBeta": false,
+          "isBuiltIn": true,
+          "isCompiled": true,
+          "isNew": false,
+          "isPineEditorNewTemplate": true,
+          "isUpdated": false,
+          "is_price_study": true,
+          "kind": "strategy",
+          "shortDescription": "RSI Strategy",
+          "sourceInputsCount": 0,
+          "tags": [
+            "Relative Strength Index Strategy"
+          ]
+        },
+        "lastVersionMaj": "0.0"
+      },
+      "retrieved_at": "2026-09-10T20:55:50.345710+00:00",
+      "sha256": "4f63c5e7c6dbebc4d48ae142ab7f0c3edbbad1108d9fbb5dda902cf31d47a6f6",
+      "response": {
+        "created": "2026-08-12T06:06:57.119952Z",
+        "extra": {
+          "isAuto": false,
+          "isBeta": false,
+          "isBuiltIn": true,
+          "isCompiled": true,
+          "isNew": false,
+          "isPineEditorNewTemplate": true,
+          "isUpdated": false,
+          "is_price_study": true,
+          "kind": "strategy",
+          "sourceInputsCount": 0
+        },
+        "lastVersionMaj": "31.0",
+        "scriptAccess": "open_no_auth",
+        "scriptName": "RSI Strategy",
+        "source": "//@version=6\nstrategy(\"RSI Strategy\", overlay=true)\nlength = input(14, \"Length\")\noverSold = input(30, \"Oversold\")\noverBought = input(70, \"Overbought\")\nprice = close\nvrsi = ta.rsi(price, length)\nco = ta.crossover(vrsi, overSold)\ncu = ta.crossunder(vrsi, overBought)\nif (not na(vrsi))\n\tif (co)\n\t\tstrategy.entry(\"RsiLE\", strategy.long, comment=\"RsiLE\")\n\tif (cu)\n\t\tstrategy.entry(\"RsiSE\", strategy.short, comment=\"RsiSE\")\n//plot(strategy.equity, title=\"equity\", color=color.red, linewidth=2, style=plot.style_areabr)",
+        "updated": "2026-08-12T06:06:57.119952Z",
+        "version": "31.0"
+      }
+    }
+  },
+  "Stochastic_Slow_Strategy": {
+    "sha256": "13ec573b2f57d0860bd77307ef3f841e558ae976848456c8246fa211fe06cf62",
+    "metadata": {
+      "url": "https://pine-facade.tradingview.com/pine-facade/get/STD%3BStochastic%251Slow%251Strategy/30.0",
+      "status": 200,
+      "script": {
+        "userId": 605017,
+        "scriptName": "Stochastic Slow Strategy",
+        "scriptSource": "",
+        "scriptAccess": "open_no_auth",
+        "scriptIdPart": "STD;Stochastic%1Slow%1Strategy",
+        "version": "30.0",
+        "extra": {
+          "isAuto": false,
+          "isBeta": false,
+          "isBuiltIn": true,
+          "isCompiled": true,
+          "isNew": false,
+          "isPineEditorNewTemplate": true,
+          "isUpdated": false,
+          "is_price_study": true,
+          "kind": "strategy",
+          "shortDescription": "Stochastic Slow Strategy",
+          "sourceInputsCount": 0,
+          "tags": []
+        },
+        "lastVersionMaj": "0.0"
+      },
+      "retrieved_at": "2026-09-10T20:55:50.714568+00:00",
+      "sha256": "0eb6e08b7dc4d409113dbe65ffa26b5aafdf11b4f8cdf52e004f1c8fdf789d79",
+      "response": {
+        "created": "2026-08-12T06:06:57.7111Z",
+        "extra": {
+          "isAuto": false,
+          "isBeta": false,
+          "isBuiltIn": true,
+          "isCompiled": true,
+          "isNew": false,
+          "isPineEditorNewTemplate": true,
+          "isUpdated": false,
+          "is_price_study": true,
+          "kind": "strategy",
+          "sourceInputsCount": 0
+        },
+        "lastVersionMaj": "30.0",
+        "scriptAccess": "open_no_auth",
+        "scriptName": "Stochastic Slow Strategy",
+        "source": "//@version=6\nstrategy(\"Stochastic Slow Strategy\", overlay=true)\nlength = input.int(14, \"Length\", minval=1)\nOverBought = input(80, \"Overbought\")\nOverSold = input(20, \"Oversold\")\nsmoothK = 3\nsmoothD = 3\nk = ta.sma(ta.stoch(close, high, low, length), smoothK)\nd = ta.sma(k, smoothD)\nco = ta.crossover(k,d)\ncu = ta.crossunder(k,d)\nif (not na(k) and not na(d))\n\tif (co and k < OverSold)\n\t\tstrategy.entry(\"StochLE\", strategy.long, comment=\"StochLE\")\n\tif (cu and k > OverBought)\n\t\tstrategy.entry(\"StochSE\", strategy.short, comment=\"StochSE\")\n//plot(strategy.equity, title=\"equity\", color=color.red, linewidth=2, style=plot.style_areabr)",
+        "updated": "2026-08-12T06:06:57.7111Z",
+        "version": "30.0"
+      }
+    }
+  },
+  "Supertrend_Strategy": {
+    "sha256": "7426cebd311e1ac0d66f8e9d577d9facd27af02a3aa424028703ef6795d07e6f",
+    "metadata": {
+      "url": "https://pine-facade.tradingview.com/pine-facade/get/STD%3BSupertrend%25Strategy/8.0",
+      "status": 200,
+      "script": {
+        "userId": 605017,
+        "scriptName": "Supertrend Strategy",
+        "scriptSource": "",
+        "scriptAccess": "open_no_auth",
+        "scriptIdPart": "STD;Supertrend%Strategy",
+        "version": "8.0",
+        "extra": {
+          "isAuto": false,
+          "isBeta": false,
+          "isBuiltIn": true,
+          "isCompiled": true,
+          "isNew": false,
+          "isPineEditorNewTemplate": true,
+          "isUpdated": false,
+          "is_price_study": true,
+          "kind": "strategy",
+          "shortDescription": "Supertrend Strategy",
+          "sourceInputsCount": 0,
+          "tags": []
+        },
+        "lastVersionMaj": "0.0"
+      },
+      "retrieved_at": "2026-09-10T20:55:50.819793+00:00",
+      "sha256": "5bcae9e4311d6a70663669bd8051356262f911d851db62a04c31e1551cfbf11e",
+      "response": {
+        "created": "2026-08-12T06:07:03.074203Z",
+        "extra": {
+          "isAuto": false,
+          "isBeta": false,
+          "isBuiltIn": true,
+          "isCompiled": true,
+          "isNew": false,
+          "isPineEditorNewTemplate": true,
+          "isUpdated": false,
+          "is_price_study": true,
+          "kind": "strategy",
+          "sourceInputsCount": 0
+        },
+        "lastVersionMaj": "8.0",
+        "scriptAccess": "open_no_auth",
+        "scriptName": "Supertrend Strategy",
+        "source": "//@version=6\nstrategy(\"Supertrend Strategy\", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=15)\n\natrPeriod = input(10, \"ATR Length\")\nfactor = input.float(3.0, \"Factor\", step = 0.01)\n\n[_, direction] = ta.supertrend(factor, atrPeriod)\n\nif ta.change(direction) < 0\n    strategy.entry(\"My Long Entry Id\", strategy.long)\n\nif ta.change(direction) > 0\n    strategy.entry(\"My Short Entry Id\", strategy.short)\n\n//plot(strategy.equity, title=\"equity\", color=color.red, linewidth=2, style=plot.style_areabr)",
+        "updated": "2026-08-12T06:07:03.074203Z",
+        "version": "8.0"
+      }
+    }
+  },
+  "Bollinger_Bands_Strategy": {
+    "sha256": "55b2e969a76779f4cd81cc80f26315b91b489c67dfd18f5517ddc9f2866a31d0",
+    "metadata": {
+      "url": "https://pine-facade.tradingview.com/pine-facade/get/STD%3BBollinger%251Bands%251Strategy/28.0",
+      "status": 200,
+      "script": {
+        "userId": 605017,
+        "scriptName": "Bollinger Bands Strategy",
+        "scriptSource": "",
+        "scriptAccess": "open_no_auth",
+        "scriptIdPart": "STD;Bollinger%1Bands%1Strategy",
+        "version": "28.0",
+        "extra": {
+          "isAuto": false,
+          "isBeta": false,
+          "isBuiltIn": true,
+          "isCompiled": true,
+          "isNew": false,
+          "isPineEditorNewTemplate": true,
+          "isUpdated": false,
+          "is_price_study": true,
+          "kind": "strategy",
+          "shortDescription": "Bollinger Bands Strategy",
+          "sourceInputsCount": 0,
+          "tags": []
+        },
+        "lastVersionMaj": "0.0"
+      },
+      "retrieved_at": "2026-09-10T20:55:50.367711+00:00",
+      "sha256": "fa12a03e6ae0a1583b59481d242242668d160ea2692a9bce7a7881fb3202ea43",
+      "response": {
+        "created": "2026-08-12T06:06:48.037494Z",
+        "extra": {
+          "isAuto": false,
+          "isBeta": false,
+          "isBuiltIn": true,
+          "isCompiled": true,
+          "isNew": false,
+          "isPineEditorNewTemplate": true,
+          "isUpdated": false,
+          "is_price_study": true,
+          "kind": "strategy",
+          "sourceInputsCount": 0
+        },
+        "lastVersionMaj": "28.0",
+        "scriptAccess": "open_no_auth",
+        "scriptName": "Bollinger Bands Strategy",
+        "source": "//@version=6\nstrategy(\"Bollinger Bands Strategy\", overlay=true)\nsource = close\nlength = input.int(20, minval=1)\nmult = input.float(2.0, minval=0.001, maxval=50)\nbasis = ta.sma(source, length)\ndev = mult * ta.stdev(source, length)\nupper = basis + dev\nlower = basis - dev\nbuyEntry = ta.crossover(source, lower)\nsellEntry = ta.crossunder(source, upper)\nif (ta.crossover(source, lower))\n\tstrategy.entry(\"BBandLE\", strategy.long, stop=lower, oca_name=\"BollingerBands\", oca_type=strategy.oca.cancel, comment=\"BBandLE\")\nelse\n\tstrategy.cancel(id=\"BBandLE\")\nif (ta.crossunder(source, upper))\n\tstrategy.entry(\"BBandSE\", strategy.short, stop=upper, oca_name=\"BollingerBands\", oca_type=strategy.oca.cancel, comment=\"BBandSE\")\nelse\n\tstrategy.cancel(id=\"BBandSE\")\n//plot(strategy.equity, title=\"equity\", color=color.red, linewidth=2, style=plot.style_areabr)",
+        "updated": "2026-08-12T06:06:48.037494Z",
+        "version": "28.0"
+      }
+    }
+  },
+  "Keltner_Channels_Strategy": {
+    "sha256": "15ef7e540250d55c770b837e81a74fcbd6da8ef7839796480e85c5874669194a",
+    "metadata": {
+      "url": "https://pine-facade.tradingview.com/pine-facade/get/STD%3BKeltner%251Channel%251Strategy/31.0",
+      "status": 200,
+      "script": {
+        "userId": 605017,
+        "scriptName": "Keltner Channels Strategy",
+        "scriptSource": "",
+        "scriptAccess": "open_no_auth",
+        "scriptIdPart": "STD;Keltner%1Channel%1Strategy",
+        "version": "31.0",
+        "extra": {
+          "isAuto": false,
+          "isBeta": false,
+          "isBuiltIn": true,
+          "isCompiled": true,
+          "isNew": false,
+          "isPineEditorNewTemplate": true,
+          "isUpdated": false,
+          "is_price_study": true,
+          "kind": "strategy",
+          "shortDescription": "Keltner Channels Strategy",
+          "sourceInputsCount": 1,
+          "tags": []
+        },
+        "lastVersionMaj": "0.0"
+      },
+      "retrieved_at": "2026-09-10T20:55:50.370965+00:00",
+      "sha256": "53cac69df70aa46f312635544618e3a57db4c38efe736f39b5aa651827ce8a68",
+      "response": {
+        "created": "2026-08-12T06:06:51.818592Z",
+        "extra": {
+          "isAuto": false,
+          "isBeta": false,
+          "isBuiltIn": true,
+          "isCompiled": true,
+          "isNew": false,
+          "isPineEditorNewTemplate": true,
+          "isUpdated": false,
+          "is_price_study": true,
+          "kind": "strategy",
+          "sourceInputsCount": 1
+        },
+        "lastVersionMaj": "31.0",
+        "scriptAccess": "open_no_auth",
+        "scriptName": "Keltner Channels Strategy",
+        "source": "//@version=6\nstrategy(title=\"Keltner Channels Strategy\", overlay=true)\nlength = input.int(20, minval=1)\nmult = input.float(2.0, \"Multiplier\")\nsrc = input(close, title=\"Source\")\nexp = input(true, \"Use Exponential MA\", display = display.none)\nBandsStyle = input.string(\"Average True Range\", options = [\"Average True Range\", \"True Range\", \"Range\"], title=\"Bands Style\", display = display.none)\natrlength = input(10, \"ATR Length\", display = display.none)\nesma(source, length)=>\n\ts = ta.sma(source, length)\n\te = ta.ema(source, length)\n\texp ? e : s\nma = esma(src, length)\nrangema = BandsStyle == \"True Range\" ? ta.tr(true) : BandsStyle == \"Average True Range\" ? ta.atr(atrlength) : ta.rma(high - low, length)\nupper = ma + rangema * mult\nlower = ma - rangema * mult\ncrossUpper = ta.crossover(src, upper)\ncrossLower = ta.crossunder(src, lower)\nbprice = 0.0\nbprice := crossUpper ? high+syminfo.mintick : nz(bprice[1])\nsprice = 0.0\nsprice := crossLower ? low -syminfo.mintick : nz(sprice[1])\ncrossBcond = false\ncrossBcond := crossUpper ? true : crossBcond[1]\ncrossScond = false\ncrossScond := crossLower ? true : crossScond[1]\ncancelBcond = crossBcond and (src < ma or high >= bprice )\ncancelScond = crossScond and (src > ma or low <= sprice )\nif (cancelBcond)\n\tstrategy.cancel(\"KltChLE\")\nif (crossUpper)\n\tstrategy.entry(\"KltChLE\", strategy.long, stop=bprice, comment=\"KltChLE\")\nif (cancelScond)\n\tstrategy.cancel(\"KltChSE\")\nif (crossLower)\n\tstrategy.entry(\"KltChSE\", strategy.short, stop=sprice, comment=\"KltChSE\")",
+        "updated": "2026-08-12T06:06:51.818592Z",
+        "version": "31.0"
+      }
+    }
+  },
+  "Parabolic_SAR_Strategy": {
+    "sha256": "b1a6a47866f6481cbe199a8a9d7f7eb02bf5035ed84bd8f2fc807d679942f85f",
+    "metadata": {
+      "url": "https://pine-facade.tradingview.com/pine-facade/get/STD%3BParabolic%251SAR%251Strategy/32.0",
+      "status": 200,
+      "script": {
+        "userId": 605017,
+        "scriptName": "Parabolic SAR Strategy",
+        "scriptSource": "",
+        "scriptAccess": "open_no_auth",
+        "scriptIdPart": "STD;Parabolic%1SAR%1Strategy",
+        "version": "32.0",
+        "extra": {
+          "isAuto": false,
+          "isBeta": false,
+          "isBuiltIn": true,
+          "isCompiled": true,
+          "isNew": false,
+          "isPineEditorNewTemplate": true,
+          "isUpdated": false,
+          "is_price_study": true,
+          "kind": "strategy",
+          "shortDescription": "Parabolic SAR Strategy",
+          "sourceInputsCount": 0,
+          "stats": {
+            "plot": 2
+          },
+          "tags": [
+            "psar",
+            "parabolic stop and reverse"
+          ]
+        },
+        "lastVersionMaj": "0.0"
+      },
+      "retrieved_at": "2026-09-10T20:55:50.365620+00:00",
+      "sha256": "ff70cb35920b4f6091c00a63ac7cbd34bbdfd22ec722870b7f6d5523f7754f68",
+      "response": {
+        "created": "2026-08-12T06:06:55.001023Z",
+        "extra": {
+          "isAuto": false,
+          "isBeta": false,
+          "isBuiltIn": true,
+          "isCompiled": true,
+          "isNew": false,
+          "isPineEditorNewTemplate": true,
+          "isUpdated": false,
+          "is_price_study": true,
+          "kind": "strategy",
+          "sourceInputsCount": 0,
+          "stats": {
+            "plot": 2
+          }
+        },
+        "lastVersionMaj": "32.0",
+        "scriptAccess": "open_no_auth",
+        "scriptName": "Parabolic SAR Strategy",
+        "source": "//@version=6\nstrategy(\"Parabolic SAR Strategy\", overlay=true)\nstart = input(0.02)\nincrement = input(0.02)\nmaximum = input(0.2)\nvar bool uptrend = false\nvar float EP = na\nvar float SAR = na\nvar float AF = start\nvar float nextBarSAR = na\nif bar_index > 0\n\tfirstTrendBar = false\n\tSAR := nextBarSAR\n\tif bar_index == 1\n\t\tfloat prevSAR = na\n\t\tfloat prevEP = na\n\t\tlowPrev = low[1]\n\t\thighPrev = high[1]\n\t\tcloseCur = close\n\t\tclosePrev = close[1]\n\t\tif closeCur > closePrev\n\t\t\tuptrend := true\n\t\t\tEP := high\n\t\t\tprevSAR := lowPrev\n\t\t\tprevEP := high\n\t\telse\n\t\t\tuptrend := false\n\t\t\tEP := low\n\t\t\tprevSAR := highPrev\n\t\t\tprevEP := low\n\t\tfirstTrendBar := true\n\t\tSAR := prevSAR + start * (prevEP - prevSAR)\n\tif uptrend\n\t\tif SAR > low\n\t\t\tfirstTrendBar := true\n\t\t\tuptrend := false\n\t\t\tSAR := math.max(EP, high)\n\t\t\tEP := low\n\t\t\tAF := start\n\telse\n\t\tif SAR < high\n\t\t\tfirstTrendBar := true\n\t\t\tuptrend := true\n\t\t\tSAR := math.min(EP, low)\n\t\t\tEP := high\n\t\t\tAF := start\n\tif not firstTrendBar\n\t\tif uptrend\n\t\t\tif high > EP\n\t\t\t\tEP := high\n\t\t\t\tAF := math.min(AF + increment, maximum)\n\t\telse\n\t\t\tif low < EP\n\t\t\t\tEP := low\n\t\t\t\tAF := math.min(AF + increment, maximum)\n\tif uptrend\n\t\tSAR := math.min(SAR, low[1])\n\t\tif bar_index > 1\n\t\t\tSAR := math.min(SAR, low[2])\n\telse\n\t\tSAR := math.max(SAR, high[1])\n\t\tif bar_index > 1\n\t\t\tSAR := math.max(SAR, high[2])\n\tnextBarSAR := SAR + AF * (EP - SAR)\n\tif barstate.isconfirmed\n\t\tif uptrend\n\t\t\tstrategy.entry(\"ParSE\", strategy.short, stop=nextBarSAR, comment=\"ParSE\")\n\t\t\tstrategy.cancel(\"ParLE\")\n\t\telse\n\t\t\tstrategy.entry(\"ParLE\", strategy.long, stop=nextBarSAR, comment=\"ParLE\")\n\t\t\tstrategy.cancel(\"ParSE\")\n\nplot(SAR,        \"SAR\",          style = plot.style_cross, linewidth = 3, color = color.orange)\nplot(nextBarSAR, \"Next bar SAR\", style = plot.style_cross, linewidth = 3, color = color.aqua)\n//plot(strategy.equity, title=\"equity\", color=color.red, linewidth=2, style=plot.style_areabr)",
+        "updated": "2026-08-12T06:06:55.001023Z",
+        "version": "32.0"
+      }
+    }
+  }
+}

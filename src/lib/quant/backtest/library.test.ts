@@ -7,15 +7,15 @@ import { runBacktest } from "./engine.ts";
 import { STRATEGY_LIBRARY, crossover, crossunder, emaSeries } from "../strategy/library.ts";
 import type { DeskConfig, FeatureBar, PortedStrategyId } from "../types.ts";
 
-function barsWith(cfg: DeskConfig, id: DeskConfig["strategyId"]): FeatureBar[] {
-  return buildDesk(generateSynthetic("BTC/USDT", cfg.ltf, 1200), generateSynthetic("BTC/USDT", "4h", 420), {
+function barsWith(cfg: DeskConfig, id: DeskConfig["strategyId"], barsN = 1200): FeatureBar[] {
+  return buildDesk(generateSynthetic("BTC/USDT", cfg.ltf, barsN), generateSynthetic("BTC/USDT", "4h", 420), {
     ...cfg,
     strategyId: id,
   }).ltf;
 }
 
-test("library registry has thirty documented ports", () => {
-  assert.equal(STRATEGY_LIBRARY.length, 30);
+test("library registry has thirty-two documented ports", () => {
+  assert.equal(STRATEGY_LIBRARY.length, 32);
   for (const s of STRATEGY_LIBRARY) {
     assert.ok(s.name.length > 0 && s.origin.length > 0 && s.rules.length >= 2);
   }
@@ -56,7 +56,10 @@ test("every ported strategy produces signals and closed trades on synthetic data
     // ATR, so the machinery is exercised with widened dips instead.
     const idCfg =
       id === "e0v1e" ? { ...cfg, e0v1eDip8: 1.2, e0v1eDip16: 1.8, e0v1eDip15: 1.5 } : cfg;
-    const bars = barsWith(idCfg, id);
+    // TOM trades by calendar month — needs a multi-month sample to reach the
+    // month-tail window past warmup.
+    const bars =
+      id === "tom" ? barsWith({ ...idCfg, ltf: "1h" }, "tom", 3600) : barsWith(idCfg, id);
     const signals = bars.filter((b) => b.signal !== 0).length;
     assert.ok(signals > 0, `${id}: expected signals on synthetic data, got 0`);
     for (const b of bars) {
